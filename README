@@ -47,9 +47,6 @@ Building:
 	nmake install
     
 
-    The regression tests are minimal at the moment so don't necessarily
-    believe all is fine if the tests succeed...
-
     Do NOT hand edit the generated Makefile unless you are completely sure
     you understand the implications! Always try to make changes via the
     Makefile.PL command line and/or editing the Makefile.PL.
@@ -64,10 +61,47 @@ Notes:
     author know so that the changes can be incorporated into the next
     version.
 
-1.  The connect() method for Adaptive Server Anywhere ignores the
-    password and dbname fields. The uid field provides the full connection
-    string. For example:
-	$dbh = DBI->connect( '', 'UID=dba;PWD=sql;ENG=asademo', '', 'ASAny' );
+1.  The connect() method for Adaptive Server Anywhere now accepts
+    connection parameters in a manner that is more consistent with
+    other drivers and which should be backward compatible in almost
+    all cases with previous DBD::ASAny versions. The recommended way
+    of specifying a connection string for ASA is to append it to the
+    end of the first connection parameter as in the following example:
+
+	$dbh = DBI->connect( 'DBI:ASAny:UID=dba;PWD=sql;ENG=asademo', '', '' );
+    
+    For backward compatibility reasons, the ASA connection string that is used
+    by the driver is essentially the concatenation of the first three parameters
+    with the following exceptions:
+	1. The 'DBI:ASAny:' prefix of the first parameter is removed (by DBI).
+	2. 'ENG=' is prefixed to the first parameter if it begins with a
+	   string which is not in 'LABEL=value' format.
+	3. 'UID=' is prefixed to the second parameter if the string does not already
+	   appear to use 'LABEL=value' format.
+	4. 'PWD=' is prefixed to the third parameter if it is non-empty.
+	
+    Examples:
+	NOTE: these do not represent the recommended way of specifying a connection
+	      string for ASA! These examples are only provided to help understand
+	      how the connect() method is compatible with older scripts.
+
+	$dbh = DBI->connect( 'DBI:ASAny:asademo', 'dba', 'sql' );
+	-> "ENG=asademo;UID=dba;PWD=sql"
+
+	$dbh = DBI->connect( 'DBI:ASAny:asademo;DBF=asademo.db', 'dba', 'sql' );
+	-> "ENG=asademo;DBF=asademo.db;UID=dba;PWD=sql"
+
+	$dbh = DBI->connect( 'DBI:ASAny:', 'dba', 'sql' );
+	-> "UID=dba;PWD=sql"
+
+	$dbh = DBI->connect( 'DBI:ASAny:', 'UID=dba;PWD=sql', '' );
+	-> "UID=dba;PWD=sql"
+
+	[really old] $dbh = DBI->connect( 'asademo', 'dba', 'sql', 'ASAny' );
+	-> "ENG=asademo;UID=dba;PWD=sql"
+
+	[really old] $dbh = DBI->connect( 'DBF=asademo.db', 'UID=dba;PWD=sql', '', 'ASAny' );
+	-> "DBF=asademo.db;UID=dba;PWD=sql"
 
 2.  Before running 'make test', a copy of the asademo.db file located
     in the ASA directory should be in your current directory. There
@@ -84,7 +118,7 @@ Notes:
 
 So what is implemented?
 
-Lets take the list at the bottom of DBI.pm:
+Let's take the list at the bottom of DBI.pm:
 
 $dbh = DBI->connect($data_source, $username, $auth);
 $dbh = DBI->connect($data_source, $username, $auth, \%attr);
@@ -126,16 +160,19 @@ $str = $h->errstr;
 $rv  = $h->state;                               Not supported
 
 
-$sth->{NAME}       (\@)                         Yes
-$sth->{NULLABLE}   (\@)                          No
-$sth->{TYPE}       (\@)                          No
-$sth->{PRECISION}  (\@)                          No
-$sth->{SCALE}      (\@)                          No
+$sth->{NAME}       (\@)			Yes
+$sth->{NULLABLE}   (\@)			Yes
+$sth->{TYPE}       (\@)			Yes
+$sth->{ASATYPE}    (\@)			Yes
+$sth->{PRECISION}  (\@)			Yes
+$sth->{SCALE}      (\@)			Yes
 
-$sth->{NUM_OF_FIELDS}  ($)                      Yes
-$sth->{NUM_OF_PARAMS}  ($)                      Yes
-
-$dbh->{LongReadLen}                             Yes
+$sth->{NUM_OF_FIELDS}	($)		Yes
+$sth->{NUM_OF_PARAMS}	($)		Yes
+$sth->{CursorName}	($)		Yes
+$sth->{Statement}	($)		Yes
+$sth->{RowsInCache}	($)		Yes
+$dbh->{LongReadLen}	($)		Yes
 
 ---------------------------------------------------------------
 

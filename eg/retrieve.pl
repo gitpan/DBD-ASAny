@@ -8,7 +8,7 @@ my($database) = "asademo";
 my($data_source) = "DBI:ASAny:$database";
 my($username) = "UID=dba;PWD=sql;ENG=asademo";
 my($sel_statement) = "SELECT id, fname, lname FROM customer"; 
-my($dbh) = &db_connect($data_source, $username, 'na');
+my($dbh) = &db_connect($data_source, $username, '');
 &db_query($sel_statement,$dbh);
 $dbh->disconnect;
 exit(0);

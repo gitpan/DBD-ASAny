@@ -49,6 +49,11 @@ struct imp_drh_st {
     dbih_drc_t com;		/* MUST be first element in structure	*/
 };
 
+struct sql_type_info {
+    short int	sqltype;
+    short int	sqllen;
+};
+
 /* Define sth implementor data structure */
 struct imp_sth_st {
     dbih_stc_t com;	    	/* MUST be first element in structure	*/
@@ -56,6 +61,7 @@ struct imp_sth_st {
     a_sql_statement_number	statement_number;
     SQLDA			*input_sqlda;	/* Bind variables */
     SQLDA			*output_sqlda;
+    struct sql_type_info	*original_type_info;
     int				cursor_open;
     int				row_count;
     char      			*statement;   	/* sql (see sth_scan)			*/

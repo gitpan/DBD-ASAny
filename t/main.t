@@ -20,7 +20,7 @@ print "Switch: $switch->{'Attribution'}, $switch->{'Version'}\n";
 
 print "Available Drivers: ",join(", ",DBI->available_drivers()),"\n";
 
-my $dbh = DBI->connect("DBI:ASAny:asademo", 'UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db', 'na', {PrintError => 0});
+my $dbh = DBI->connect("DBI:ASAny:asademo", 'UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db', '', {PrintError => 0});
 
 die "Unable for connect to asademo: $DBI::errstr"
     unless $dbh;

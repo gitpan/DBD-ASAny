@@ -121,7 +121,9 @@ EXEC SQL END DECLARE SECTION;
     imp_dbh->next_cursor_id = 1;
     imp_dbh->next_tempvar_id = 1;
 
-    conn_str = uid;	// we use the uid field to contain the entire connection string
+    // ASAny.pm ensures that the entire connection string comes through in the dbname field
+    conn_str = dbname;
+
     // printf( "Connect string: %s\n", conn_str );
     EXEC SQL CONNECT USING :conn_str;
     if( SQLCODE ) {
@@ -240,13 +242,16 @@ dbd_db_FETCH_attrib( SV *dbh, imp_dbh_t *imp_dbh, SV *keysv )
 {
     STRLEN 	kl;
     char 	*key = SvPV(keysv,kl);
-    SV 		*retsv = NULL;
+    SV 		*retsv = Nullsv;
 
     /* Default to caching results for DBI dispatch quick_FETCH	*/
-    int cacheit = TRUE;
+    int cacheit = FALSE;
 
-    if( 1 ) {		/* no attribs defined yet	*/
-	return Nullsv;
+    if( kl==10 && strEQ(key, "AutoCommit") ) {
+        retsv = boolSV(DBIc_has(imp_dbh,DBIcf_AutoCommit));
+    }
+    if( retsv == Nullsv ) {
+	return( Nullsv );
     }
     if( cacheit ) {	/* cache for next time (via DBI quick_FETCH)	*/
 	SV **svp = hv_fetch( (HV*)SvRV(dbh), key, kl, 1 );
@@ -273,6 +278,9 @@ dbd_st_prepare( SV *sth, imp_sth_t *imp_sth, char *statement, SV *attribs )
     imp_sth->done_prepare = 0;
     imp_sth->done_desc = 0;
     imp_sth->cursor_open = 0;
+    imp_sth->input_sqlda = NULL;
+    imp_sth->output_sqlda = NULL;
+    imp_sth->original_type_info = NULL;
 
     /* scan statement for '?', ':1' and/or ':foo' style placeholders	*/
     dbd_preparse( imp_sth, statement );
@@ -814,8 +822,17 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	}
     }
 
+
     num_fields = imp_sth->output_sqlda->sqld;
     DBIc_NUM_FIELDS(imp_sth) = num_fields;
+
+    // Need original type information from the output sqlda in case the user
+    // wants the column attributes
+    imp_sth->original_type_info = (struct sql_type_info *)safemalloc( num_fields * sizeof(struct sql_type_info) );
+    for( i=0; i<num_fields; i++ ) {
+	imp_sth->original_type_info[i].sqllen = imp_sth->output_sqlda->sqlvar[i].sqllen;
+	imp_sth->original_type_info[i].sqltype = imp_sth->output_sqlda->sqlvar[i].sqltype;
+    }
 
     max_len = DBIc_LongReadLen(imp_sth);
     if( max_len < 0 || max_len > MAX_DT_VARCHAR_LENGTH ) {
@@ -1236,8 +1253,8 @@ dbd_st_finish( SV *sth, imp_sth_t *imp_sth )
 }
 
 static void
-my_free_sqlda( SQLDA *sqlda )
-/***************************/
+my_free_sqlda( SQLDA *sqlda, int is_output_sqlda )
+/************************************************/
 {
     int		i;
 
@@ -1246,7 +1263,12 @@ my_free_sqlda( SQLDA *sqlda )
     }
     for( i=0; i<sqlda->sqln; i++ ) {
 	if( sqlda->sqlvar[i].sqldata != NULL ) {
-	    if( (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||
+	    // For output SQLDAs, the sqldata field is always allocated by us.
+	    // For input SQLDAs, the sqldata field is only allocated by us if
+	    // it is VARCHAR or BINARY (otherwise it is pointing to stuff allocated
+	    // by Perl or something such as a variable name that will be freed elsewhere).
+	    if( is_output_sqlda ||
+	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||
 	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_VARCHAR ) {
 		safefree( sqlda->sqlvar[i].sqldata );
 	    }
@@ -1269,8 +1291,11 @@ dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
     dbd_st_finish( sth, imp_sth );
 
     /* Free off contents of imp_sth	*/
-    my_free_sqlda( imp_sth->input_sqlda );
-    my_free_sqlda( imp_sth->output_sqlda );
+    my_free_sqlda( imp_sth->input_sqlda, FALSE );
+    my_free_sqlda( imp_sth->output_sqlda, TRUE );
+    if( imp_sth->original_type_info != NULL ) {
+	safefree( imp_sth->original_type_info );
+    }
 
     Safefree(imp_sth->statement);
 
@@ -1307,6 +1332,53 @@ dbd_st_STORE_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv, SV *valuesv )
     return( FALSE );
 }
 
+#ifndef SQL_DATETIME
+#define SQL_DATETIME 9
+#endif
+
+static int
+native_to_odbc_type( short int sqltype )
+/**************************************/
+{
+    int		odbc_type;
+
+    switch( sqltype&DT_TYPES ) {
+	case DT_BIT		: odbc_type = SQL_BIT; break;
+	case DT_TINYINT		: odbc_type = SQL_TINYINT; break;
+
+	case DT_UNSSMALLINT	:
+	case DT_SMALLINT	: odbc_type = SQL_SMALLINT; break;
+
+	case DT_UNSINT		:
+	case DT_INT		: odbc_type = SQL_INTEGER; break;
+
+	case DT_UNSBIGINT	:
+	case DT_BIGINT		: odbc_type = SQL_BIGINT; break;
+
+	case DT_DATE		: odbc_type = SQL_DATE; break;
+	case DT_TIME		: odbc_type = SQL_TIME; break;
+
+	case DT_TIMESTAMP	:
+	case DT_TIMESTAMP_STRUCT: odbc_type = SQL_TIMESTAMP; break;
+
+	case DT_DECIMAL		: odbc_type = SQL_DECIMAL; break;
+	case DT_FLOAT		: odbc_type = SQL_FLOAT; break;
+	case DT_DOUBLE		: odbc_type = SQL_DOUBLE; break;
+
+	case DT_STRING		:
+	case DT_FIXCHAR		: odbc_type = SQL_CHAR; break;
+
+	case DT_VARCHAR		:
+	case DT_LONGVARCHAR	:
+	case DT_BINARY		:
+	case DT_LONGBINARY	: odbc_type = SQL_VARCHAR; break;
+
+	default:
+	    odbc_type = SQL_ALL_TYPES;	// whatever
+	    break;
+    }
+    return( odbc_type );
+}
 
 SV *
 dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
@@ -1319,7 +1391,6 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 
     /* Default to caching results for DBI dispatch quick_FETCH	*/
     int cacheit = TRUE;
-    /* int oraperl = DBIc_COMPAT(imp_sth); */
 
     if( kl==13 && strEQ(key, "NUM_OF_PARAMS") ) {	/* handled by DBI */
 	return( Nullsv );	
@@ -1335,13 +1406,101 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 
     i = DBIc_NUM_FIELDS(imp_sth);
 
-    if( kl==4 && strEQ( key, "NAME" ) ) {
+    if( kl == 4 && strEQ( key, "NAME" ) ) {
 	AV *av = newAV();
-
-	retsv = newRV(sv_2mortal((SV*)av));
-	while(--i >= 0) {
-	    av_store(av, i, newSVpv((char*)imp_sth->output_sqlda->sqlvar[i].sqlname.data,0));
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    av_store( av, i, newSVpv((char*)imp_sth->output_sqlda->sqlvar[i].sqlname.data,0) );
 	}
+    } else if( kl == 7 && strEQ( key, "ASATYPE" ) ) {
+	// Translating types to ODBC type can be lossy
+	AV *av = newAV();
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    av_store( av, i, newSViv(imp_sth->original_type_info[i].sqltype&DT_TYPES) );
+	}
+    } else if( kl == 4 && strEQ( key, "TYPE" ) ) {
+	AV *av = newAV();
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    av_store( av, i, newSViv(native_to_odbc_type(imp_sth->original_type_info[i].sqltype)) );
+	}
+    } else if( kl == 5 && strEQ( key, "SCALE" ) ) {
+	AV *av = newAV();
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    switch( imp_sth->original_type_info[i].sqltype&DT_TYPES ) {
+		case DT_DECIMAL	:
+		case DT_BASE100	:
+		    av_store( av, i, newSViv(SCALE(imp_sth->original_type_info[i].sqllen)) );
+		    break;
+	    }
+	}
+    } else if( kl == 9 && strEQ( key, "PRECISION" ) ) {
+	AV *av = newAV();
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    switch( imp_sth->original_type_info[i].sqltype&DT_TYPES ) {
+		case DT_DECIMAL	:
+		case DT_BASE100	:
+		    av_store( av, i, newSViv(PRECISION(imp_sth->original_type_info[i].sqllen)) );
+		    break;
+		case DT_FLOAT	:
+		    av_store( av, i, newSViv(10) );
+		    break;
+		case DT_DOUBLE	:
+		    av_store( av, i, newSViv(15) );
+		    break;
+		// For the integer types, I assume I am supposed to return the max field width (which
+		// is also the number of significant digits) in base 10, disregarding negative signs
+		// (as documented for numerics)
+		case DT_BIT		:
+		    av_store( av, i, newSViv(1) );
+		    break;
+		case DT_TINYINT		:
+		    av_store( av, i, newSViv(3) );
+		    break;
+		case DT_SMALLINT	:
+		case DT_UNSSMALLINT	:
+		    av_store( av, i, newSViv(5) );
+		    break;
+		case DT_UNSINT		:
+		case DT_INT		:
+		    av_store( av, i, newSViv(10) );
+		    break;
+		case DT_BIGINT		:
+		case DT_UNSBIGINT	:
+		    av_store( av, i, newSViv(20) );
+		    break;
+		case DT_VARCHAR		:
+		case DT_BINARY		:
+		case DT_FIXCHAR		:
+		case DT_STRING		:
+		    av_store( av, i, newSViv(imp_sth->original_type_info[i].sqllen) );
+		    break;
+		case DT_LONGVARCHAR	:
+		case DT_LONGBINARY	:
+		    av_store( av, i, newSViv(2147483647) );
+		    break;
+		default			:
+		    // Otheriwse return the display length (output sqlda should be pointing
+		    // to a varchar).
+		    av_store( av, i, newSViv(imp_sth->output_sqlda->sqlvar[i].sqllen-sizeof(short)) );
+		    break;
+	    }
+	}
+    } else if( kl == 8 && strEQ( key, "NULLABLE" ) ) {
+	AV *av = newAV();
+	retsv = newRV( sv_2mortal( (SV*)av ) );
+	while( --i >= 0 ) {
+	    av_store( av, i, boolSV((imp_sth->original_type_info[i].sqltype&DT_NULLS_ALLOWED)?1:0) );
+	}
+    } else if( kl == 10 && strEQ( key, "CursorName" ) ) {
+	retsv = newSVpv( (char *)imp_sth->cursor_name, 0 );
+    } else if( kl == 9 && strEQ( key, "Statement" ) ) {
+	retsv = newSVpv( (char *)imp_sth->statement, 0 );
+    } else if( kl == 11 && strEQ( key, "RowsInCache" ) ) {
+	retsv = &sv_undef;
     } else {
 	return( Nullsv );
     }

@@ -13,7 +13,7 @@ print "ok 1\n";
 
 #DBI->trace(2);
 
-my $dbh = DBI->connect("DBI:ASAny:asademo", 'UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db', 'na', {PrintError => 0});
+my $dbh = DBI->connect("DBI:ASAny:asademo", 'UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db', '', {PrintError => 0});
 
 die "Unable for connect to asademo: $DBI::errstr"
     unless $dbh;

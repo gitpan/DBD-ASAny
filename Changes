@@ -1,3 +1,19 @@
+Changes in DBD::ASAny 1.09	21st September 2000
+  Added support for type_info_all and (indirectly) quote()
+  Added support for the following statement attributes:
+    TYPE, ASATYPE, SCALE, PRECISION, NULLABLE, CursorName,
+    Statement, and RowsInCache. 
+  	RowsInCache always returns undef.
+	ASATYPE returns an array of native ASA type codes which
+	  is more detailed than the ODBC-types returned
+	  by the TYPE attribute. ASA type codes correspond to
+	  integer values defined in sqldef.h or you can use
+	  ASA type codes directly by doing 'use DBD::ASAny qw(:asa_types);'
+  Changed handling of parameters to the connect() method to be more
+    consistent with other drivers.
+  Fixed a memory leak: space allocated for non-string, non-binary fields
+    of an output SQLDA were not freed.
+
 Changes in DBD::ASAny 1.08	15th August 2000
   When executing a statement that affected zero rows, an error was
     reported rather than success.
