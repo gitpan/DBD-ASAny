@@ -8,6 +8,13 @@ EXEC SQL SET SQLCA "(&imp_dbh->sqlca)";
 
 DBISTATE_DECLARE;
 
+#ifndef PerlIO
+#  define PerlIO FILE
+#  define PerlIO_printf fprintf
+#  define PerlIO_stderr() stderr
+#  define PerlIO_stdout() stdout
+#endif
+
 /* XXX DBI should provide a better version of this */
 #define IS_DBI_HANDLE(h) \
     (SvROK(h) && SvTYPE(SvRV(h)) == SVt_PVHV && \
@@ -19,7 +26,7 @@ dbd_init( dbistate_t *dbistate )
 {
     DBISTATE_INIT;
 //DBIS->debug = 2;
-DBILOGFP = stdout;
+DBILOGFP = PerlIO_stdout();
 }
 
 
@@ -82,8 +89,8 @@ ssa_error( SV *h, SQLCA *sqlca, an_sql_code sqlcode, char *what )
     }
     DBIh_EVENT2(h, ERROR_event, DBIc_ERR(imp_xxh), errstr);
     if( DBIS->debug >= 2 ) {
-	fprintf( DBILOGFP, "%s error %d recorded: %s\n",
-		 what, (sqlca?sqlca->sqlcode:sqlcode), SvPV(errstr,na) );
+	PerlIO_printf( DBILOGFP, "%s error %d recorded: %s\n",
+		       what, (sqlca?sqlca->sqlcode:sqlcode), SvPV(errstr,na) );
     }
 }
 
@@ -387,8 +394,8 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
     if( imp_sth->bind_names ) {
 	DBIc_NUM_PARAMS(imp_sth) = (int)HvKEYS(imp_sth->bind_names);
 	if( DBIS->debug >= 2 ) {
-	    fprintf( DBILOGFP, "scanned %d distinct placeholders\n",
-		     (int)DBIc_NUM_PARAMS(imp_sth) );
+	    PerlIO_printf( DBILOGFP, "scanned %d distinct placeholders\n",
+			   (int)DBIc_NUM_PARAMS(imp_sth) );
 	}
     }
 }
@@ -599,15 +606,15 @@ dbd_bind_ph( SV		*sth,
     }
 
     if( DBIS->debug >= 2 ) {
-	fprintf( DBILOGFP, "         bind %s <== %s (type %ld",
-		 name, neatsvpv(newvalue,0), (long)sql_type );
+	PerlIO_printf( DBILOGFP, "         bind %s <== %s (type %ld",
+		       name, neatsvpv(newvalue,0), (long)sql_type );
 	if( is_inout ) {
-	    fprintf( DBILOGFP, ", inout 0x%lx", (long)newvalue );
+	    PerlIO_printf( DBILOGFP, ", inout 0x%lx", (long)newvalue );
 	}
 	if( attribs ) {
-	    fprintf( DBILOGFP, ", attribs: %s", SvPV(attribs,na) );
+	    PerlIO_printf( DBILOGFP, ", attribs: %s", SvPV(attribs,na) );
 	}
-	fprintf( DBILOGFP, ")\n" );
+	PerlIO_printf( DBILOGFP, ")\n" );
     }
 
     svp = hv_fetch( imp_sth->bind_names, name, name_len, 0 );
@@ -693,7 +700,7 @@ dbd_bind_ph( SV		*sth,
     var = &imp_sth->input_sqlda->sqlvar[phs->in_ordinal-1];
 
     if( DBIS->debug >= 2 ) {
-	fprintf( DBILOGFP, "Binding input hostvar '%s' to sqlvar %d('%s')\n", name, phs->in_ordinal, var->sqlname.data );
+	PerlIO_printf( DBILOGFP, "Binding input hostvar '%s' to sqlvar %d('%s')\n", name, phs->in_ordinal, var->sqlname.data );
     }
 
     *var->sqlind = phs->indp;
@@ -770,12 +777,12 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
     }
     
     if( DBIS->debug >= 3 ) {
-	fprintf( DBILOGFP, "\nBind variables SQLDA:\n" );
+	PerlIO_printf( DBILOGFP, "\nBind variables SQLDA:\n" );
 	for( i=0; i<imp_sth->input_sqlda->sqld; i++ ) {
 	    struct sqlvar	*var = &imp_sth->input_sqlda->sqlvar[i];
 
-	    fprintf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", 
-		     i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
+	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", 
+			   i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
 	}
     }
 
@@ -798,11 +805,12 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
     }
     
     if( DBIS->debug >= 3 ) {
-	fprintf( DBILOGFP, "\nOutput SQLDA:\n" );
+        PerlIO_printf( DBILOGFP, "\nOutput SQLDA:\n" );
 	for( i=0; i<imp_sth->output_sqlda->sqld; i++ ) {
 	    struct sqlvar	*var = &imp_sth->output_sqlda->sqlvar[i];
-	    fprintf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s, len %d\n",
-		     i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data, var->sqllen );
+	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s, len %d\n",
+			   i, var->sqltype, (unsigned short)*var->sqlind,
+			   var->sqlname.data, var->sqllen );
 	}
     }
 
@@ -1061,7 +1069,7 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	imp_sth->cursor_id = NO_CURSOR_ID;
 	stmt_number = imp_sth->statement_number;
 	EXEC SQL EXECUTE :stmt_number USING DESCRIPTOR "imp_sth->input_sqlda" INTO DESCRIPTOR "imp_sth->output_sqlda";
-	if( SQLCODE ) {
+	if( SQLCODE != 0 && SQLCODE != SQLE_NOTFOUND ) {
 	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "execute failed" );
 	    return( -2 );
 	}
@@ -1077,7 +1085,7 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	EXEC SQL DECLARE :crsr_name CURSOR FOR :stmt_number;
 
 	if( DBIS->debug >= 2 ) {
-	    fprintf( DBILOGFP, "Open %s (%x)\n", crsr_name, imp_sth );
+	    PerlIO_printf( DBILOGFP, "Open %s (%x)\n", crsr_name, imp_sth );
 	}
 	EXEC SQL OPEN :crsr_name USING DESCRIPTOR "imp_sth->input_sqlda";
 	if( SQLCODE ) {
@@ -1130,7 +1138,7 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
 	} else if( SQLCODE != SQLE_TRUNCATED ) {
 	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "fetch failed" );
 	    if( debug >= 3 ) {
-		fprintf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
+		PerlIO_printf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
 	    }
 	    return( Nullav );
 	}
@@ -1139,7 +1147,7 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
     num_fields = AvFILL( av ) + 1;
 
     if( debug >= 3 ) {
-	fprintf(DBILOGFP, "    dbd_st_fetch %d fields\n", num_fields);
+	PerlIO_printf(DBILOGFP, "    dbd_st_fetch %d fields\n", num_fields);
     }
 
     for( i=0; i < num_fields; ++i ) {
@@ -1164,8 +1172,8 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
 	}
 
 	if( debug >= 3 ) {
-	    fprintf( DBILOGFP, "        %d: ind=%d '%s'\n",
-		     i, indicator, SvPV(sv,na) );
+	    PerlIO_printf( DBILOGFP, "        %d: ind=%d '%s'\n",
+			   i, indicator, SvPV(sv,na) );
 	}
     }
     return( av );

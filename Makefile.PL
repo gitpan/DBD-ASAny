@@ -92,9 +92,13 @@ if( $Config{osname} eq "MSWin32" ) {
 	}
     }
 } else {
+    push( @install_dirs, "/opt/SYBSsa9" );
     push( @install_dirs, "/opt/SYBSasa9" );
+    push( @install_dirs, "/opt/SYBSsa8" );
     push( @install_dirs, "/opt/SYBSasa8" );
+    push( @install_dirs, "/opt/SYBSsa7" );
     push( @install_dirs, "/opt/SYBSasa7" );
+    push( @install_dirs, "/opt/SYBSsa6" );
     push( @install_dirs, "/opt/SYBSasa6" );
 }
 

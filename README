@@ -28,10 +28,18 @@ Building:
     
     On Win32:
 	[ requires Microsoft C and ActiveState's ActivePerl (www.activestate.com) ]
-	NOTE: ActivePerl 5.6.0 build 613 (the most current build as of this writing)
-	      crashes when it encounters a 'use DBI;' statement in a script (such as
-	      Makefile.PL). Until the bug is fixed, you will need to use an older version
-	      of ActivePerl.
+	NOTE: ActivePerl 5.6.0 build 616 or later is required.
+
+	NOTE: If you see errors related to a missing PerlCRT.DLL you
+	      probably have a DBI module compiled with an older
+	      ActivePerl. When I upgraded to 616 by overwriting my old
+	      ActivePerl installation directory, I was unable to
+	      install a new DBI module using ppm. To avoid the 'missing
+	      PerlCRT.DLL' errors, either download, build and install
+	      the DBI module yourself or do a full uninstall of
+	      ActivePerl, delete the old ActivePerl installation tree,
+	      then install a new ActivePerl and a new DBI module using
+	      ppm.
 
 	perl Makefile.PL
 	nmake
@@ -49,25 +57,29 @@ Building:
 
 Notes:
 
-0.  The ASAny DBD driver is NOT supported by Sybase technical support. If you have
-    difficulties, please try to solve them yourself *before* you contact the author
-    (smirnios@sybase.com). If you make additions, improvements or bug fixes, please
-    let the author know so that the changes can be incorporated into the next version.
+0.  The ASAny DBD driver is NOT supported by Sybase technical
+    support. If you have difficulties, please try to solve them
+    yourself *before* you contact the author (smirnios@sybase.com). If
+    you make additions, improvements or bug fixes, please let the
+    author know so that the changes can be incorporated into the next
+    version.
 
 1.  The connect() method for Adaptive Server Anywhere ignores the
     password and dbname fields. The uid field provides the full connection
     string. For example:
 	$dbh = DBI->connect( '', 'UID=dba;PWD=sql;ENG=asademo', '', 'ASAny' );
 
-2.  Before running 'make test', a copy of the asademo.db file located in the ASA 
-    directory should be in your current directory. There have been problems autostarting
-    and autostopping engines in rapid succession on UNIX. If you encounter a problem
-    autostarting the engine, start the engine on asademo.db before running the tests.
+2.  Before running 'make test', a copy of the asademo.db file located
+    in the ASA directory should be in your current directory. There
+    have been problems autostarting and autostopping engines in rapid
+    succession on UNIX. If you encounter a problem autostarting the
+    engine, start the engine on asademo.db before running the tests.
 
-3.  The ASAny DBD driver should now be thread-safe; however, simple multi-threaded
-    tests can easily crash perl. It is suspected that the current implementation of
-    Perl threads and/or DBI in a threaded environment is the cause of the instability,
-    not the driver.
+3.  The ASAny DBD driver should now be thread-safe; however, simple
+    multi-threaded tests can easily crash perl. It is suspected that
+    the current implementation of Perl threads and/or DBI in a
+    threaded environment is the cause of the instability, not the
+    driver.
 
 
 So what is implemented?
@@ -123,11 +135,14 @@ $sth->{SCALE}      (\@)                          No
 $sth->{NUM_OF_FIELDS}  ($)                      Yes
 $sth->{NUM_OF_PARAMS}  ($)                      Yes
 
+$dbh->{LongReadLen}                             Yes
+
 ---------------------------------------------------------------
 
 There are two examples in the 'eg' directory.
 connect.pl  -> Demonstrates a simple connect.
 retrieve.pl -> Demonstrates retrieving data from a table and displaying the result set.
+blobs.pl    -> Demonstrates the use of blobs
 
 For further examples, consult the test scripts located in the 't' directory.
 

@@ -1,3 +1,10 @@
+Changes in DBD::ASAny 1.08	15th August 2000
+  When executing a statement that affected zero rows, an error was
+    reported rather than success.
+  Fixed driver to build with ActivePerl build 616 and DBI 1.14.
+  Makefile now searches for SQLAnywhere in /opt/SYBSsa[6-9] as well as
+    /opt/SYBSasa[6-9].
+
 Changes in DBD::ASAny 1.07	17th May 2000
   Fixed bug introduced in 1.06 - a statement that is prepared
     then dropped before being used could cause a GPF.

@@ -14,3 +14,4 @@ t/main.t
 t/place.t
 eg/connect.pl
 eg/retrieve.pl
+eg/blobs.pl
