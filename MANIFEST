@@ -7,6 +7,7 @@ ASAny.xs
 dbdimp.h
 dbdimp.sqc
 Makefile.PL
+license.txt
 t/base.t
 t/login.t
 t/main.t

@@ -1,3 +1,11 @@
+Changes in DBD::ASAny 1.05	25th January 2000
+
+  Added Sybase license agreement
+  Adding a call to db_fini when a connection attempt failed. Not calling
+    db_fini in this situation caused a memory leak.
+  Added better handling for detecting new ASA versions -- should handle
+   up to version 9 now (which doesn't exist yet...)
+
 Changes in DBD::ASAny 1.04	19th November 1999
 
   Fixed inout parameter support.

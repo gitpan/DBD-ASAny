@@ -67,10 +67,6 @@ if( $Config{osname} eq "MSWin32" ) {
 }
 
 my @install_dirs;
-my @subdirs;
-my $install_dir;
-my $subdir;
-my $found_dir;
 
 if( defined $ENV{ASANY} ) {
     push( @install_dirs, $ENV{ASANY} );
@@ -79,94 +75,77 @@ if( defined $ENV{ASANY} ) {
 my $location;
 my $key;
 my $type;
+my $ver;
 if( $Config{osname} eq "MSWin32" ) {
-    if( $main::HKEY_CURRENT_USER->Open( 'Software\Sybase\Adaptive Server Anywhere\7.0', $key ) ) {
-	if( $key->QueryValueEx( 'Location', $type, $location ) ) {
-	    push( @install_dirs, $location );
+    foreach $ver ( ("9.0","8.0","7.0","6.0") ) {
+	if( $main::HKEY_CURRENT_USER->Open( "Software\\Sybase\\Adaptive Server Anywhere\\${ver}", $key ) ) {
+	    if( $key->QueryValueEx( 'Location', $type, $location ) ) {
+		push( @install_dirs, $location );
+	    }
+	    $key->Close();
 	}
-	$key->Close();
-    }
-    if( $main::HKEY_LOCAL_MACHINE->Open( 'SOFTWARE\Sybase\Adaptive Server Anywhere\7.0', $key ) ) {
-	if( $key->QueryValueEx( 'Location', $type, $location ) ) {
-	    push( @install_dirs, $location );
+	if( $main::HKEY_LOCAL_MACHINE->Open( "SOFTWARE\\Sybase\\Adaptive Server Anywhere\\${ver}", $key ) ) {
+	    if( $key->QueryValueEx( 'Location', $type, $location ) ) {
+		push( @install_dirs, $location );
+	    }
+	    $key->Close();
 	}
-	$key->Close();
     }
-    if( $main::HKEY_CURRENT_USER->Open( 'Software\Sybase\Adaptive Server Anywhere\6.0', $key ) ) {
-	if( $key->QueryValueEx( 'Location', $type, $location ) ) {
-	    push( @install_dirs, $location );
-	}
-	$key->Close();
-    }
-    if( $main::HKEY_LOCAL_MACHINE->Open( 'SOFTWARE\Sybase\Adaptive Server Anywhere\6.0', $key ) ) {
-	if( $key->QueryValueEx( 'Location', $type, $location ) ) {
-	    push( @install_dirs, $location );
-	}
-	$key->Close();
-    }
-    
-    push( @subdirs, "win32/lib" );
-    push( @subdirs, "h" );
 } else {
+    push( @install_dirs, "/opt/SYBSasa9" );
+    push( @install_dirs, "/opt/SYBSasa8" );
     push( @install_dirs, "/opt/SYBSasa7" );
     push( @install_dirs, "/opt/SYBSasa6" );
-    push( @subdirs, "lib" );
-    push( @subdirs, "bin" );
-    push( @subdirs, "include" );
 }
 
 my $ASA = "";
-foreach $install_dir ( @install_dirs ) {
-    if( $install_dir ne "" ) {
-	$found_dir = 1;
-	foreach $subdir ( @subdirs ) {
-	    if( ! (-d "$install_dir/$subdir") ) {
-		$found_dir = 0;
-		last;
-	   }
+my $asa_version_major = "";
+my $dir;
+my $found = 0;
+
+foreach $dir ( @install_dirs ) {
+    next if $dir eq "";
+
+    if( $Config{osname} eq "MSWin32" ) {
+	if( -d "${dir}/win32/lib" &&
+	    -d "${dir}/h" ) {
+	    foreach $ver ( (9,8,7,6) ) {
+		if( -e "${dir}/win32/dbeng${ver}.exe" ) {
+		    $ASA = $dir;
+		    $asa_version_major = $ver;
+		    $found = 1;
+		    last;
+		}
+	    }
 	}
-	if( $found_dir ) {
-	    $ASA = $install_dir;
-	    last;
-        }
+    } else {
+	if( -d "${dir}/lib" &&
+	    -d "${dir}/bin" &&
+	    -d "${dir}/include" ) {
+	    foreach $ver ( (9,8,7,6) ) {
+		if( -e "${dir}/bin/dbeng${ver}" ) {
+		    $ASA = $dir;
+		    $asa_version_major = $ver;
+		    $found = 1;
+		    last;
+		}
+	    }
+	}
     }
+    last if $found;
 }
 
-my $asa_version_major;
-
-$asa_version_major = "";
-if( $Config{osname} eq "MSWin32" ) {
-    if( -e "$ASA/win32/dbeng7.exe" ) {
-	$asa_version_major = 7;
-    } elsif( -e "$ASA/win32/dbeng6.exe" ) {
-	$asa_version_major = 6;
-    } else {
-	printf( "Cannot determine ASA version\n" );
-	exit( 1 );
-    }
-} else {
-    if( -e "$ASA/bin/dbeng7" ) {
-	$asa_version_major = 7;
-    } elsif( -e "$ASA/bin/dbeng6" ) {
-	$asa_version_major = 6;
-    } else {
-	printf( "Cannot determine ASA version\n" );
-	exit( 1 );
-    }
+if( !$found ) {
+    die "** Unable to find Adaptiver Server Anywhere installation\n\n** Please set ASANY.\n";
 }
 
+print "Using ASA version ${asa_version_major} in $ASA\n";
 
 if( $Config{osname} eq "MSWin32" ) {
     $dblib = "dblibtm";
 } else {
     $dblib = "dblib${asa_version_major}";
 }
-
-if( "$ASA" eq "" ) {
-    die "** Unable to find Adaptiver Server Anywhere installation\n\n** Please set ASANY.\n";
-}
-
-print "Using ASA in $ASA\n";
 
 my $is_gcc;
 if( "$Config{cc}" eq "gcc" ||
@@ -240,6 +219,7 @@ if( $Config{osname} eq "MSWin32" ) {
     $opts{INC}  .= "-I$Config{sitearchexp}/auto/DBI";
     $opts{DEFINE} .= ' -DUNIX';
 }
+#$opts{OPTIMIZE}="-g";
 
 # uncomment log key platform information to help me help you quickly
 print "System: perl$] @Config{qw(myuname archname dlsrc)}\n";

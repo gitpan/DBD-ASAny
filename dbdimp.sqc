@@ -118,6 +118,7 @@ EXEC SQL END DECLARE SECTION;
     EXEC SQL CONNECT USING :conn_str;
     if( SQLCODE ) {
 	ssa_error( dbh, SQLCAPTR, SQLE_ERROR, "login failed" );
+	db_fini( SQLCAPTR );
 	return( 0 );
     }
 
