@@ -1,3 +1,18 @@
+Changes in DBD::ASAny 1.12	11th May 2001
+  Fixed a problem with inout parameters where binding other parameters can
+    cause us to find the incorrect location of the output parameter in the
+    output SQLDA.
+  Correctly handle NULL output parameters from procedures.
+  Removed some debug printfs that snuck into v1.10.
+  Corrected README to show that bind_param_inout is a supported function.
+  Do not treat warnings as errors (err/errstr are still set but the calls
+    to execute/fetch will not report a failure).
+
+Changes in DBD::ASAny 1.11	27th March 2001
+  Calling a procedure or batch that returned a result set for which
+    the engine could not infer the data types, errors were reported. Fixed
+    by describing the cursor after it was opened.
+
 Changes in DBD::ASAny 1.10	13th November 2000
   Added support for AutoCommit.
 

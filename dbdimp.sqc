@@ -111,7 +111,6 @@ EXEC SQL BEGIN DECLARE SECTION;
     char	*conn_str;
 EXEC SQL END DECLARE SECTION; 
 
-
     if( !db_init( SQLCAPTR ) ) {
 	ssa_error( dbh, SQLCAPTR, SQLE_ERROR, "db_init failed" );
     }
@@ -286,19 +285,21 @@ dbd_st_prepare( SV *sth, imp_sth_t *imp_sth, char *statement, SV *attribs )
     imp_sth->cursor_open = 0;
     imp_sth->input_sqlda = NULL;
     imp_sth->output_sqlda = NULL;
-    imp_sth->original_type_info = NULL;
+    imp_sth->original_input_indicators = NULL;
+    imp_sth->original_output_type_info = NULL;
 
     /* scan statement for '?', ':1' and/or ':foo' style placeholders	*/
     dbd_preparse( imp_sth, statement );
     _statement = (char *)imp_sth->statement;
 
-//printf( "\n\nPrepare: '%s'\n\n", _statement ); fflush(stdout);
+//PerlIO_printf( PerlIO_stderr(), "\n\nPrepare: '%s'\n\n", _statement ); fflush(stdout);
     EXEC SQL PREPARE :stmt_number FROM :_statement;
     if( SQLCODE ) {
 	ssa_error( sth, SQLCAPTR, SQLE_ERROR, "prepare failed" ); 
 	return( 0 );
     }
     imp_sth->statement_number = stmt_number;
+    imp_sth->statement_type = SQLIOESTIMATE;
 
     /* Describe and allocate storage for results. This could	*/
     /* and possibly should be deferred until execution or some	*/
@@ -450,7 +451,7 @@ find_output_ordinal( imp_sth_t 	*imp_sth, char *name, int input_ordinal )
     int		i;
     SQLDA	*sqlda = imp_sth->input_sqlda;
     int		output_ordinal = 0;
-    struct sqlvar *var;
+    short	ind;
 
     // Note that ordinals are origin 1, not origin 0
     if( input_ordinal == 0 ) {
@@ -461,14 +462,14 @@ find_output_ordinal( imp_sth_t 	*imp_sth, char *name, int input_ordinal )
 	croak( "inout parameter ordinal %d exceeds number of host variables", input_ordinal );
     }
     
-    var = &sqlda->sqlvar[input_ordinal-1];
-    if( ((*var->sqlind)&(DT_UPDATABLE|DT_PROCEDURE_OUT)) == 0 ) {
+    ind = imp_sth->original_input_indicators[input_ordinal-1];
+    if( (ind&(DT_UPDATABLE|DT_PROCEDURE_OUT)) == 0 ) {
 	croak( "Host variable %s is not updatable", name );
     }
 
     for( i=0; i<sqlda->sqld; i++ ) {
-	var = &sqlda->sqlvar[i];
-	if( (*var->sqlind)&(DT_UPDATABLE|DT_PROCEDURE_OUT) ) {
+	ind = imp_sth->original_input_indicators[i];
+	if( ind&(DT_UPDATABLE|DT_PROCEDURE_OUT) ) {
 	    ++output_ordinal;
 	}
 	if( i+1 == input_ordinal ) {
@@ -754,70 +755,14 @@ dbd_bind_ph( SV		*sth,
     return( 1 );
 }
 
-int
-dbd_describe( SV *sth, imp_sth_t *imp_sth )
-/*****************************************/
+static void
+setup_output_sqlda( imp_sth_t *imp_sth )
+/**************************************/
 {
-    D_imp_dbh_from_sth;
     int				i;
     int				num_fields;
-    a_sql_statement_number 	stmt_number;
-    int				sqlda_size;
     I32				max_len;
 
-    if( imp_sth->done_desc ) {
-	return( 1 );	/* success, already done it */
-    }
-    imp_sth->done_desc = 1;
-
-    stmt_number = imp_sth->statement_number;
-
-    sqlda_size = BIND_VARIABLES_INITIAL_SQLDA_SIZE;
-    for(;;) {
-	imp_sth->input_sqlda = alloc_sqlda( sqlda_size );
-
-	EXEC SQL DESCRIBE BIND VARIABLES FOR :stmt_number USING DESCRIPTOR "imp_sth->input_sqlda";
-	if( SQLCODE ) {
-	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe bind variables failed" ); 
-	    return( 0 );
-	}
-	if( imp_sth->input_sqlda->sqld <= imp_sth->input_sqlda->sqln ) {
-	    break;
-	}
-
-	// Try again with a larger SQLDA
-	sqlda_size = imp_sth->input_sqlda->sqld;
-	free_sqlda( imp_sth->input_sqlda );
-    }
-    
-    if( DBIS->debug >= 3 ) {
-	PerlIO_printf( DBILOGFP, "\nBind variables SQLDA:\n" );
-	for( i=0; i<imp_sth->input_sqlda->sqld; i++ ) {
-	    struct sqlvar	*var = &imp_sth->input_sqlda->sqlvar[i];
-
-	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", 
-			   i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
-	}
-    }
-
-    sqlda_size = OUTPUT_VARIABLES_INITIAL_SQLDA_SIZE;
-    for(;;) {
-	imp_sth->output_sqlda = alloc_sqlda( sqlda_size );
-
-	EXEC SQL DESCRIBE OUTPUT FOR :stmt_number USING DESCRIPTOR "imp_sth->output_sqlda";
-	if( SQLCODE ) {
-	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe output failed" ); 
-	    return( 0 );
-	}
-	if( imp_sth->output_sqlda->sqld <= imp_sth->output_sqlda->sqln ) {
-	    break;
-	}
-
-	// Try again with a larger SQLDA
-	sqlda_size = imp_sth->output_sqlda->sqld;
-	free_sqlda( imp_sth->output_sqlda );
-    }
-    
     if( DBIS->debug >= 3 ) {
         PerlIO_printf( DBILOGFP, "\nOutput SQLDA:\n" );
 	for( i=0; i<imp_sth->output_sqlda->sqld; i++ ) {
@@ -828,16 +773,15 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	}
     }
 
-
     num_fields = imp_sth->output_sqlda->sqld;
     DBIc_NUM_FIELDS(imp_sth) = num_fields;
 
     // Need original type information from the output sqlda in case the user
     // wants the column attributes
-    imp_sth->original_type_info = (struct sql_type_info *)safemalloc( num_fields * sizeof(struct sql_type_info) );
+    imp_sth->original_output_type_info = (struct sql_type_info *)safemalloc( num_fields * sizeof(struct sql_type_info) );
     for( i=0; i<num_fields; i++ ) {
-	imp_sth->original_type_info[i].sqllen = imp_sth->output_sqlda->sqlvar[i].sqllen;
-	imp_sth->original_type_info[i].sqltype = imp_sth->output_sqlda->sqlvar[i].sqltype;
+	imp_sth->original_output_type_info[i].sqllen = imp_sth->output_sqlda->sqlvar[i].sqllen;
+	imp_sth->original_output_type_info[i].sqltype = imp_sth->output_sqlda->sqlvar[i].sqltype;
     }
 
     max_len = DBIc_LongReadLen(imp_sth);
@@ -898,6 +842,137 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	var->sqldata = safemalloc( var->sqllen );
     }
 
+}
+
+int
+dbd_describe( SV *sth, imp_sth_t *imp_sth )
+/*****************************************/
+{
+    D_imp_dbh_from_sth;
+    int				i;
+    a_sql_statement_number 	stmt_number;
+    int				sqlda_size;
+
+    if( imp_sth->done_desc ) {
+	return( 1 );	/* success, already done it */
+    }
+    imp_sth->done_desc = 1;
+
+    stmt_number = imp_sth->statement_number;
+
+    sqlda_size = BIND_VARIABLES_INITIAL_SQLDA_SIZE;
+    for(;;) {
+	imp_sth->input_sqlda = alloc_sqlda( sqlda_size );
+
+	EXEC SQL DESCRIBE BIND VARIABLES FOR :stmt_number USING DESCRIPTOR "imp_sth->input_sqlda";
+	if( SQLCODE ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe bind variables failed" ); 
+	    return( 0 );
+	}
+	if( imp_sth->input_sqlda->sqld <= imp_sth->input_sqlda->sqln ) {
+	    break;
+	}
+
+	// Try again with a larger SQLDA
+	sqlda_size = imp_sth->input_sqlda->sqld;
+	free_sqlda( imp_sth->input_sqlda );
+    }
+    
+    if( DBIS->debug >= 3 ) {
+	PerlIO_printf( DBILOGFP, "\nBind variables SQLDA:\n" );
+	for( i=0; i<imp_sth->input_sqlda->sqld; i++ ) {
+	    struct sqlvar	*var = &imp_sth->input_sqlda->sqlvar[i];
+
+	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", 
+			   i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
+	}
+    }
+    // Need original input indicators in order to find correct output ordinals later (once input
+    // parameters are bound, the indicators will change).
+    imp_sth->original_input_indicators = (short *)safemalloc( imp_sth->input_sqlda->sqld * sizeof(short) );
+    for( i=0; i<imp_sth->input_sqlda->sqld; i++ ) {
+	imp_sth->original_input_indicators[i] = *imp_sth->input_sqlda->sqlvar[i].sqlind;
+    }
+
+    sqlda_size = OUTPUT_VARIABLES_INITIAL_SQLDA_SIZE;
+    for(;;) {
+	imp_sth->output_sqlda = alloc_sqlda( sqlda_size );
+
+	EXEC SQL DESCRIBE OUTPUT FOR :stmt_number USING DESCRIPTOR "imp_sth->output_sqlda";
+	if( SQLCODE ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe output failed" ); 
+	    return( 0 );
+	}
+	if( imp_sth->output_sqlda->sqld <= imp_sth->output_sqlda->sqln ) {
+	    break;
+	}
+
+	// Try again with a larger SQLDA
+	sqlda_size = imp_sth->output_sqlda->sqld;
+	free_sqlda( imp_sth->output_sqlda );
+    }
+    setup_output_sqlda( imp_sth );
+    
+    return( 1 );
+}
+
+static void
+my_free_sqlda( SQLDA *sqlda, int is_output_sqlda )
+/************************************************/
+{
+    int		i;
+
+    if( sqlda == NULL ) {
+	return;
+    }
+    for( i=0; i<sqlda->sqln; i++ ) {
+	if( sqlda->sqlvar[i].sqldata != NULL ) {
+	    // For output SQLDAs, the sqldata field is always allocated by us.
+	    // For input SQLDAs, the sqldata field is only allocated by us if
+	    // it is VARCHAR or BINARY (otherwise it is pointing to stuff allocated
+	    // by Perl or something such as a variable name that will be freed elsewhere).
+	    if( is_output_sqlda ||
+	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||
+	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_VARCHAR ) {
+		safefree( sqlda->sqlvar[i].sqldata );
+	    }
+	    sqlda->sqlvar[i].sqldata = NULL;
+	}
+    }
+    free_sqlda( sqlda );
+}
+
+static int
+describe_cursor( SV *sth, imp_sth_t *imp_sth )
+/********************************************/
+{
+    D_imp_dbh_from_sth;
+    int		sqlda_size;
+EXEC SQL BEGIN DECLARE SECTION;
+    char	*crsr_name;
+EXEC SQL END DECLARE SECTION;
+
+    my_free_sqlda( imp_sth->output_sqlda, TRUE );
+
+    crsr_name = imp_sth->cursor_name;
+    sqlda_size = OUTPUT_VARIABLES_INITIAL_SQLDA_SIZE;
+    for(;;) {
+	imp_sth->output_sqlda = alloc_sqlda( sqlda_size );
+
+	EXEC SQL DESCRIBE OUTPUT FOR CURSOR :crsr_name USING DESCRIPTOR "imp_sth->output_sqlda";
+	if( SQLCODE ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe cursor failed" ); 
+	    return( 0 );
+	}
+	if( imp_sth->output_sqlda->sqld <= imp_sth->output_sqlda->sqln ) {
+	    break;
+	}
+
+	// Try again with a larger SQLDA
+	sqlda_size = imp_sth->output_sqlda->sqld;
+	free_sqlda( imp_sth->output_sqlda );
+    }
+    setup_output_sqlda( imp_sth );
     return( 1 );
 }
 
@@ -938,50 +1013,77 @@ free_cursor_id( imp_dbh_t *imp_dbh, unsigned long cursor_id )
     imp_dbh->available_cursors[imp_dbh->available_cursors_top++] = cursor_id;
 }
 
-static void
-assign_from_sqlvar( SV *sv, struct sqlvar *var )
-/**********************************************/
+static int
+assign_from_sqlvar( SV *sth, imp_sth_t *imp_sth, SV *sv, int output_sqlda_index, int allow_blobs )
+/************************************************************************************************/
 {
+    D_imp_dbh_from_sth;
+    SQLVAR	*var 	  = &imp_sth->output_sqlda->sqlvar[output_sqlda_index];
+    short   	indicator = *var->sqlind;
     short	fetched_len;
 
-    switch( var->sqltype&DT_TYPES ) {
-	case DT_TINYINT		:
-	    sv_setiv( sv, (IV)(*(char *)var->sqldata) );
-	    break;
+    if( indicator == 0 ) {
+	switch( var->sqltype&DT_TYPES ) {
+	    case DT_TINYINT		:
+		sv_setiv( sv, (IV)(*(char *)var->sqldata) );
+		break;
 
-	case DT_SMALLINT	:
-	    sv_setiv( sv, (IV)(*(short *)var->sqldata) );
-	    break;
+	    case DT_SMALLINT		:
+		sv_setiv( sv, (IV)(*(short *)var->sqldata) );
+		break;
 
-	case DT_INT		:
-	    sv_setiv( sv, (IV)(*(int *)var->sqldata) );
-	    break;
+	    case DT_INT			:
+		sv_setiv( sv, (IV)(*(int *)var->sqldata) );
+		break;
 
-	case DT_BIT		:
-	    sv_setuv( sv, (UV)(*(unsigned char *)var->sqldata) );
-	    break;
+	    case DT_BIT			:
+		sv_setuv( sv, (UV)(*(unsigned char *)var->sqldata) );
+		break;
 
-	case DT_UNSSMALLINT	:
-	    sv_setuv( sv, (UV)(*(unsigned short *)var->sqldata) );
-	    break;
+	    case DT_UNSSMALLINT		:
+		sv_setuv( sv, (UV)(*(unsigned short *)var->sqldata) );
+		break;
 
-	case DT_UNSINT		:
-	    sv_setuv( sv, (UV)(*(unsigned int *)var->sqldata) );
-	    break;
+	    case DT_UNSINT		:
+		sv_setuv( sv, (UV)(*(unsigned int *)var->sqldata) );
+		break;
 
-	case DT_FLOAT		:
-	    sv_setnv( sv, (double)(*(float *)var->sqldata) );
-	    break;
+	    case DT_FLOAT		:
+		sv_setnv( sv, (double)(*(float *)var->sqldata) );
+		break;
 
-	case DT_DOUBLE		:
-	    sv_setnv( sv, *(double *)var->sqldata );
-	    break;
+	    case DT_DOUBLE		:
+		sv_setnv( sv, *(double *)var->sqldata );
+		break;
 
-	default			:
-	    // All other types are fetched as strings
-	    fetched_len = *(short *)var->sqldata;
-	    sv_setpvn( sv, (char *)var->sqldata + sizeof(short), fetched_len );
+	    default			:
+		// All other types are fetched as strings
+		fetched_len = *(short *)var->sqldata;
+		sv_setpvn( sv, (char *)var->sqldata + sizeof(short), fetched_len );
+		break;
+	}
+    } else if( indicator > 0 ) {
+	if( !allow_blobs ) {
+	    // Should never get here -- we should have reported SQLE_TRUNCATED
+	    croak( "Cannot fetch blobs as output parameters from procedures" );
+	}
+	if( !assign_blob( imp_dbh, imp_sth, sv, output_sqlda_index ) ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "assign_blob failed" );
+	    return( FALSE );
+	}
+    } else if( indicator == -1 || indicator <-2 ) {	
+	/* field is null - return undef */
+	(void)SvOK_off(sv);
+    } else {
+	//  indicator == -2 
+	croak( "Conversion error! -- this shouldn't happen" );
     }
+
+    if( DBIS->debug >= 3 ) {
+	PerlIO_printf( DBILOGFP, "        %d: ind=%d '%s'\n",
+		       output_sqlda_index, *var->sqlind, SvPV(sv,na) );
+    }
+    return( TRUE );
 }
 
 static int
@@ -992,21 +1094,20 @@ assign_blob( imp_dbh_t *imp_dbh, imp_sth_t *imp_sth, SV *sv, int col )
     short		fetched_len;
     I32			max_len;
     I32			len;
+    char		*crsr_name;
 
 EXEC SQL BEGIN DECLARE SECTION;
     DECL_BINARY(32000)	piece;
     short		ind;
     long		offset;
     long		crsr_col;
-    char		*crsr_name;
 EXEC SQL END DECLARE SECTION;
 
     max_len = DBIc_LongReadLen(imp_sth);
     fetched_len = *(short *)var->sqldata;
     if( fetched_len > max_len && !DBIc_has(imp_sth,DBIcf_LongTruncOk) ) {
-printf( "col=%d, fetched_len=%d, max_len=%d\n", col, fetched_len, max_len );
-printf( "Line: %d\n", __LINE__ );
-printf( "Value: %s\n", (char *)(((short *)var->sqldata)+1) );
+//printf( "col=%d, fetched_len=%d, max_len=%d\n", col, fetched_len, max_len );
+//printf( "Value: %s\n", (char *)(((short *)var->sqldata)+1) );
 	return( FALSE );
     }
 
@@ -1021,12 +1122,10 @@ printf( "Value: %s\n", (char *)(((short *)var->sqldata)+1) );
     for( offset=fetched_len; offset < max_len; offset += len ) {
 	EXEC SQL GET DATA :crsr_name COLUMN :crsr_col OFFSET :offset INTO :piece:ind;
         if( SQLCODE < 0 || (SQLCODE != 0 && SQLCODE !=SQLE_TRUNCATED) ) {
-printf( "Line: %d\n", __LINE__ );
 	    return( FALSE );
 	}
 	if( ind < 0 ) {
 	    // NULL -- shouldn't get here
-printf( "Line: %d\n", __LINE__ );
 	    return( FALSE );
 	}
 	len = piece.len;
@@ -1034,7 +1133,6 @@ printf( "Line: %d\n", __LINE__ );
 	    if( DBIc_has(imp_sth,DBIcf_LongTruncOk) ) {
 		len = max_len - offset;
 	    } else {
-printf( "Line: %d\n", __LINE__ );
 		SQLCODE = SQLE_TRUNCATED;
 		return( FALSE );
 	    }
@@ -1048,9 +1146,10 @@ printf( "Line: %d\n", __LINE__ );
 }
 
 static void
-assign_inout_parameters( imp_dbh_t *imp_dbh, imp_sth_t *imp_sth )
-/***************************************************************/
+assign_inout_parameters( SV *sth, imp_sth_t *imp_sth )
+/****************************************************/
 {
+    D_imp_dbh_from_sth;
     HE		*he;
     HV		*hv;
     SV		*sv;
@@ -1063,8 +1162,7 @@ assign_inout_parameters( imp_dbh_t *imp_dbh, imp_sth_t *imp_sth )
 	sv = hv_iterval( hv, he );
 	phs = (phs_t*)((void*)SvPVX(sv));		/* placeholder struct	*/
 	if( phs->out_ordinal != 0 ) {
-	    var = &imp_sth->output_sqlda->sqlvar[phs->out_ordinal-1];
-	    assign_from_sqlvar( phs->sv, var );
+	    assign_from_sqlvar( sth, imp_sth, phs->sv, phs->out_ordinal-1, FALSE );
 	}
     }
 }
@@ -1089,23 +1187,43 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
     imp_sth->cursor_open = 0;
     if( DBIc_NUM_FIELDS(imp_sth) == 0 || imp_sth->has_output_params ) {
 	// Nothing coming back -- use execute
-//printf( "Executing statement\n" ); fflush(stdout);
+//PerlIO_printf( PerlIO_stderr(), "Executing stmt\n" );
 	imp_sth->cursor_id = NO_CURSOR_ID;
 	stmt_number = imp_sth->statement_number;
 	EXEC SQL EXECUTE :stmt_number USING DESCRIPTOR "imp_sth->input_sqlda" INTO DESCRIPTOR "imp_sth->output_sqlda";
-	if( SQLCODE != 0 && SQLCODE != SQLE_NOTFOUND ) {
-	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "execute failed" );
-	    return( -2 );
+	if( SQLCODE ) {
+	    if( SQLCODE == SQLE_NOTFOUND ) {
+		sv_setiv( DBIc_ERR(imp_sth), 0 );
+		return( 0 );	// No rows affected
+	    } else {
+		// This error case for SQLE_TRUNCATED as well because there is no
+		// way to call GET DATA without a cursor.
+		if( SQLCODE > 0 ) {
+		    // Just a warning
+		    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "warning during execute" );
+		    if( DBIS->debug >= 3 ) {
+			PerlIO_printf( DBILOGFP, "    dbd_st_execute warning, rc=%d", SQLCODE );
+		    }
+		} else {
+		    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "execute failed" );
+		    if( DBIS->debug >= 3 ) {
+			PerlIO_printf( DBILOGFP, "    dbd_st_execute failed, rc=%d", SQLCODE );
+		    }
+		    return( -2 );
+		}
+	    }
 	}
 	if( imp_sth->has_output_params ) {
 	    // Assign the new values back to the variable
-	    assign_inout_parameters( imp_dbh, imp_sth );
+	    assign_inout_parameters( sth, imp_sth );
 	}
         if( DBIc_has(imp_dbh,DBIcf_AutoCommit) ) {
 	    // Don't do the commit here -- we don't want to lose the rowcount
 	    do_commit = TRUE;
 	}
+	imp_sth->row_count = SQLCOUNT;
     } else {
+//PerlIO_printf( PerlIO_stderr(), "Opening cursor\n" );
 	stmt_number = imp_sth->statement_number;
 	imp_sth->cursor_id = alloc_cursor_id( imp_dbh );
 	crsr_name = imp_sth->cursor_name;
@@ -1121,10 +1239,17 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	    return( -2 );
 	}
 	imp_sth->cursor_open = 1;
+	imp_sth->row_count = SQLCOUNT;
+
+	if( imp_sth->statement_type == SQLPRES_STMT_CALL ||
+	    imp_sth->statement_type == SQLPRES_STMT_BATCH ) {
+	    if( !describe_cursor( sth, imp_sth ) ) {
+		return( -2 );
+	    }
+	}
     }
 
     DBIc_ACTIVE_on(imp_sth);
-    imp_sth->row_count = SQLCOUNT;
     if( do_commit ) {
 	EXEC SQL COMMIT;
     }
@@ -1167,11 +1292,19 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
 	    sv_setiv( DBIc_ERR(imp_sth), 0 );	/* just end-of-fetch	*/
 	    return( Nullav );
 	} else if( SQLCODE != SQLE_TRUNCATED ) {
-	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "fetch failed" );
-	    if( debug >= 3 ) {
-		PerlIO_printf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
+	    if( SQLCODE > 0 ) {
+		// Just a warning
+		ssa_error( sth, SQLCAPTR, SQLE_ERROR, "warning during fetch" );
+		if( DBIS->debug >= 3 ) {
+		    PerlIO_printf( DBILOGFP, "    dbd_st_fetch warning, rc=%d", SQLCODE );
+		}
+	    } else {
+		ssa_error( sth, SQLCAPTR, SQLE_ERROR, "fetch failed" );
+		if( debug >= 3 ) {
+		    PerlIO_printf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
+		}
+		return( Nullav );
 	    }
-	    return( Nullav );
 	}
     }
     av = DBIS->get_fbav( imp_sth );
@@ -1182,29 +1315,10 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
     }
 
     for( i=0; i < num_fields; ++i ) {
-	short   	indicator;
-	struct sqlvar 	*var = &imp_sth->output_sqlda->sqlvar[i];
 	SV 		*sv = AvARRAY(av)[i]; /* Note: we (re)use the SV in the AV	*/
 
-	indicator = *var->sqlind;
-	if( indicator == 0 ) {
-	    assign_from_sqlvar( sv, var );
-	} else if( indicator > 0 ) {
-	    if( !assign_blob( imp_dbh, imp_sth, sv, i ) ) {
-		ssa_error( sth, SQLCAPTR, SQLE_ERROR, "assign_blob failed" );
-		return( Nullav );
-	    }
-	} else 	if( *var->sqlind == -1 || *var->sqlind <-2 ) {	
-	    /* field is null - return undef */
-	    (void)SvOK_off(sv);
-	} else {
-	    //  indicator == -2 
-	    croak( "Conversion error! -- this shouldn't happen" );
-	}
-
-	if( debug >= 3 ) {
-	    PerlIO_printf( DBILOGFP, "        %d: ind=%d '%s'\n",
-			   i, indicator, SvPV(sv,na) );
+	if( !assign_from_sqlvar( sth, imp_sth, sv, i, TRUE ) ) {
+	    return( Nullav );
 	}
     }
     return( av );
@@ -1266,33 +1380,6 @@ dbd_st_finish( SV *sth, imp_sth_t *imp_sth )
     return( 1 );
 }
 
-static void
-my_free_sqlda( SQLDA *sqlda, int is_output_sqlda )
-/************************************************/
-{
-    int		i;
-
-    if( sqlda == NULL ) {
-	return;
-    }
-    for( i=0; i<sqlda->sqln; i++ ) {
-	if( sqlda->sqlvar[i].sqldata != NULL ) {
-	    // For output SQLDAs, the sqldata field is always allocated by us.
-	    // For input SQLDAs, the sqldata field is only allocated by us if
-	    // it is VARCHAR or BINARY (otherwise it is pointing to stuff allocated
-	    // by Perl or something such as a variable name that will be freed elsewhere).
-	    if( is_output_sqlda ||
-	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||
-	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_VARCHAR ) {
-		safefree( sqlda->sqlvar[i].sqldata );
-	    }
-	    sqlda->sqlvar[i].sqldata = NULL;
-	}
-    }
-    free_sqlda( sqlda );
-}
-
-
 void
 dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
 /*******************************************/
@@ -1307,8 +1394,11 @@ dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
     /* Free off contents of imp_sth	*/
     my_free_sqlda( imp_sth->input_sqlda, FALSE );
     my_free_sqlda( imp_sth->output_sqlda, TRUE );
-    if( imp_sth->original_type_info != NULL ) {
-	safefree( imp_sth->original_type_info );
+    if( imp_sth->original_input_indicators != NULL ) {
+	safefree( imp_sth->original_input_indicators );
+    }
+    if( imp_sth->original_output_type_info != NULL ) {
+	safefree( imp_sth->original_output_type_info );
     }
 
     Safefree(imp_sth->statement);
@@ -1431,22 +1521,22 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 	AV *av = newAV();
 	retsv = newRV( sv_2mortal( (SV*)av ) );
 	while( --i >= 0 ) {
-	    av_store( av, i, newSViv(imp_sth->original_type_info[i].sqltype&DT_TYPES) );
+	    av_store( av, i, newSViv(imp_sth->original_output_type_info[i].sqltype&DT_TYPES) );
 	}
     } else if( kl == 4 && strEQ( key, "TYPE" ) ) {
 	AV *av = newAV();
 	retsv = newRV( sv_2mortal( (SV*)av ) );
 	while( --i >= 0 ) {
-	    av_store( av, i, newSViv(native_to_odbc_type(imp_sth->original_type_info[i].sqltype)) );
+	    av_store( av, i, newSViv(native_to_odbc_type(imp_sth->original_output_type_info[i].sqltype)) );
 	}
     } else if( kl == 5 && strEQ( key, "SCALE" ) ) {
 	AV *av = newAV();
 	retsv = newRV( sv_2mortal( (SV*)av ) );
 	while( --i >= 0 ) {
-	    switch( imp_sth->original_type_info[i].sqltype&DT_TYPES ) {
+	    switch( imp_sth->original_output_type_info[i].sqltype&DT_TYPES ) {
 		case DT_DECIMAL	:
 		case DT_BASE100	:
-		    av_store( av, i, newSViv(SCALE(imp_sth->original_type_info[i].sqllen)) );
+		    av_store( av, i, newSViv(SCALE(imp_sth->original_output_type_info[i].sqllen)) );
 		    break;
 	    }
 	}
@@ -1454,10 +1544,10 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 	AV *av = newAV();
 	retsv = newRV( sv_2mortal( (SV*)av ) );
 	while( --i >= 0 ) {
-	    switch( imp_sth->original_type_info[i].sqltype&DT_TYPES ) {
+	    switch( imp_sth->original_output_type_info[i].sqltype&DT_TYPES ) {
 		case DT_DECIMAL	:
 		case DT_BASE100	:
-		    av_store( av, i, newSViv(PRECISION(imp_sth->original_type_info[i].sqllen)) );
+		    av_store( av, i, newSViv(PRECISION(imp_sth->original_output_type_info[i].sqllen)) );
 		    break;
 		case DT_FLOAT	:
 		    av_store( av, i, newSViv(10) );
@@ -1490,7 +1580,7 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 		case DT_BINARY		:
 		case DT_FIXCHAR		:
 		case DT_STRING		:
-		    av_store( av, i, newSViv(imp_sth->original_type_info[i].sqllen) );
+		    av_store( av, i, newSViv(imp_sth->original_output_type_info[i].sqllen) );
 		    break;
 		case DT_LONGVARCHAR	:
 		case DT_LONGBINARY	:
@@ -1507,7 +1597,7 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 	AV *av = newAV();
 	retsv = newRV( sv_2mortal( (SV*)av ) );
 	while( --i >= 0 ) {
-	    av_store( av, i, boolSV((imp_sth->original_type_info[i].sqltype&DT_NULLS_ALLOWED)?1:0) );
+	    av_store( av, i, boolSV((imp_sth->original_output_type_info[i].sqltype&DT_NULLS_ALLOWED)?1:0) );
 	}
     } else if( kl == 10 && strEQ( key, "CursorName" ) ) {
 	retsv = newSVpv( (char *)imp_sth->cursor_name, 0 );

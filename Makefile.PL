@@ -191,6 +191,7 @@ $sysliblist .= " -l${dblib}";
 $opts{CCFLAGS} = $Config{ccflags};	
 if( $Config{osname} eq "MSWin32" ) {
     $sysliblist .= " -l${perllib}";
+#    $opts{CCFLAGS} =~ s/-O1//;
 } elsif( "$Config{osname}" eq "solaris" ) {
     $sysliblist .= " -lsocket -lnsl -lm -lc";
     if( $is_gcc ) {
@@ -223,7 +224,8 @@ if( $Config{osname} eq "MSWin32" ) {
     $opts{INC}  .= "-I$Config{sitearchexp}/auto/DBI";
     $opts{DEFINE} .= ' -DUNIX';
 }
-#$opts{OPTIMIZE}="-g";
+# $opts{OPTIMIZE}="-Zi";
+# $opts{dynamic_lib}{OTHERLDFLAGS} .= ' -debug';
 
 # uncomment log key platform information to help me help you quickly
 print "System: perl$] @Config{qw(myuname archname dlsrc)}\n";

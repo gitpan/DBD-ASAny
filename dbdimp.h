@@ -61,7 +61,8 @@ struct imp_sth_st {
     a_sql_statement_number	statement_number;
     SQLDA			*input_sqlda;	/* Bind variables */
     SQLDA			*output_sqlda;
-    struct sql_type_info	*original_type_info;
+    short			*original_input_indicators;
+    struct sql_type_info	*original_output_type_info;
     int				cursor_open;
     int				row_count;
     char      			*statement;   	/* sql (see sth_scan)			*/
@@ -72,9 +73,25 @@ struct imp_sth_st {
     unsigned long		cursor_id;
     a_cursor_name		cursor_name;
     int				has_output_params;
+    int				statement_type;
 };
 #define IMP_STH_EXECUTING	0x0001
 
+#define SQLPRES_STMT_OTHER             0
+#define SQLPRES_STMT_DELETE            1
+#define SQLPRES_STMT_INSERT            2
+#define SQLPRES_STMT_SELECT            3
+#define SQLPRES_STMT_UPDATE            4
+#define SQLPRES_STMT_CALL              5
+#define SQLPRES_STMT_PROCEDURE         6
+#define SQLPRES_STMT_OPENCURSOR        7
+#define SQLPRES_STMT_FETCH             8
+#define SQLPRES_STMT_CLOSECURSOR       9
+#define SQLPRES_STMT_TRUNCATE_TABLE    10
+#define SQLPRES_STMT_TSQLSELECTINTO    11
+#define SQLPRES_STMT_READTEXT          12
+#define SQLPRES_STMT_BATCH             13
+#define SQLPRES_STMT_TERMINATE         14
 
 typedef struct phs_st phs_t;    /* scalar placeholder   */
 
