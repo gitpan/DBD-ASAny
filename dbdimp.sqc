@@ -222,10 +222,16 @@ dbd_db_STORE_attrib( SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv )
     STRLEN 	kl;
     char 	*key = SvPV( keysv, kl );
     SV 		*cachesv = NULL;
+    int		was_off;
     int 	on = SvTRUE( valuesv );
 
     if( kl==10 && strEQ( key, "AutoCommit" ) ) {
+	was_off = !DBIc_has(imp_dbh,DBIcf_AutoCommit);
+	if( was_off && on ) {
+	    EXEC SQL COMMIT;
+	}
 	cachesv = (on) ? &sv_yes : &sv_no;	/* cache new state */
+	DBIc_set( imp_dbh, DBIcf_AutoCommit, on );
     } else {
 	return FALSE;
     }
@@ -1071,6 +1077,7 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
     D_imp_dbh_from_sth;
     a_sql_statement_number 	stmt_number;
     char			*crsr_name;
+    int				do_commit = FALSE;
 
     if( !imp_sth->done_desc ) {
 	/* describe and allocate storage for results		*/
@@ -1094,6 +1101,10 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	    // Assign the new values back to the variable
 	    assign_inout_parameters( imp_dbh, imp_sth );
 	}
+        if( DBIc_has(imp_dbh,DBIcf_AutoCommit) ) {
+	    // Don't do the commit here -- we don't want to lose the rowcount
+	    do_commit = TRUE;
+	}
     } else {
 	stmt_number = imp_sth->statement_number;
 	imp_sth->cursor_id = alloc_cursor_id( imp_dbh );
@@ -1114,6 +1125,9 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 
     DBIc_ACTIVE_on(imp_sth);
     imp_sth->row_count = SQLCOUNT;
+    if( do_commit ) {
+	EXEC SQL COMMIT;
+    }
     // Negative row-counts are estimates but dbperl wants a positive
     return( imp_sth->row_count < 0 ? -imp_sth->row_count : imp_sth->row_count );
 }

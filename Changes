@@ -1,3 +1,6 @@
+Changes in DBD::ASAny 1.10	13th November 2000
+  Added support for AutoCommit.
+
 Changes in DBD::ASAny 1.09	21st September 2000
   Added support for type_info_all and (indirectly) quote()
   Added support for the following statement attributes:
