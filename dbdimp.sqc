@@ -1233,6 +1233,9 @@ my_free_sqlda( SQLDA *sqlda )
 {
     int		i;
 
+    if( sqlda == NULL ) {
+	return;
+    }
     for( i=0; i<sqlda->sqln; i++ ) {
 	if( sqlda->sqlvar[i].sqldata != NULL ) {
 	    if( (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||

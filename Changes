@@ -1,3 +1,8 @@
+Changes in DBD::ASAny 1.07	17th May 2000
+  Fixed bug introduced in 1.06 - a statement that is prepared
+    then dropped before being used could cause a GPF.
+  Minor revision to license text.
+
 Changes in DBD::ASAny 1.06	10th March 2000
   Added support for blobs and long strings. Values transferred to
     or from the engine can be up to 2GB in size. Default LongReadLen

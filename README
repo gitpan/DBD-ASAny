@@ -28,6 +28,10 @@ Building:
     
     On Win32:
 	[ requires Microsoft C and ActiveState's ActivePerl (www.activestate.com) ]
+	NOTE: ActivePerl 5.6.0 build 613 (the most current build as of this writing)
+	      crashes when it encounters a 'use DBI;' statement in a script (such as
+	      Makefile.PL). Until the bug is fixed, you will need to use an older version
+	      of ActivePerl.
 
 	perl Makefile.PL
 	nmake

@@ -1,13 +1,3 @@
-/*
-   $Id: dbdimp.h,v 1.11 1996/03/05 02:27:25 timbo Exp $
-
-   Copyright (c) 1994,1995  Tim Bunce
-
-   You may distribute under the terms of either the GNU General Public
-   License or the Artistic License, as specified in the Perl README file.
-
-*/
-
 /* these are (almost) random values ! */
 #define MAX_COLS 1025
 

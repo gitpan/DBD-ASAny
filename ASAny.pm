@@ -1,7 +1,7 @@
 require 5.002;
 
 
-$DBD::ASAny::VERSION = '1.06';
+$DBD::ASAny::VERSION = '1.07';
 
 {
     package DBD::ASAny;
