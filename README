@@ -1,13 +1,10 @@
 DBD::ASAny -- an Adaptive Server Anywhere interface for Perl 5.
 
-   Portions Copyright (c) 1994,1995,1996  Tim Bunce
-   Portions Copyright (c) 1996,1998,1999  Sybase Inc.
+   Portions Copyright (c) 1994,1995,1996       Tim Bunce
+   Portions Copyright (c) 1996,1998,1999,2000  Sybase Inc.
 
-   You may distribute under the terms of either the GNU General Public
-   License or the Artistic License, as specified in the Perl README file.
-
-
-** WARNING: THIS IS MOSTLY ALPHA SOFTWARE. Your mileage may vary. **
+   For license information, please see license.txt included in this
+   distribution.
 
 *BEFORE* BUILDING, TESTING AND INSTALLING this you will need to:
 
@@ -68,7 +65,6 @@ Notes:
     Perl threads and/or DBI in a threaded environment is the cause of the instability,
     not the driver.
 
-Let me repeat: this is ALPHA software - testing has been minimal!!!
 
 So what is implemented?
 
@@ -90,8 +86,8 @@ $rc = $sth->bind_col($col_num, \$col_variable);
 $rc = $sth->bind_columns(\%attr, @list_of_refs_to_vars_to_bind);
 
 $rv = $sth->bind_param($param_num, $bind_value);
-$rv = $sth->bind_param($param_num, $bind_value, $bind_type);    $bind_type ignored
-$rv = $sth->bind_param($param_num, $bind_value, \%attr);        %attr ignored
+$rv = $sth->bind_param($param_num, $bind_value, $bind_type);
+$rv = $sth->bind_param($param_num, $bind_value, \%attr);
 
 $rv = $sth->execute;
 $rv = $sth->execute(@bind_values);

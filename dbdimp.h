@@ -18,6 +18,25 @@ typedef char a_cursor_name[32];
 #define NO_CURSOR_ID	(~0UL)
 #define AVAILABLE_CURSORS_GROWTH_AMOUNT 10
 
+// SQLDA var field requires 2 bytes of length information in addition
+// to the data. We must prevent sqlvar->sqllen field from overflowing
+// (sqlvar->sqllen is a 16-bit signed integer)
+#define MAX_DT_VARCHAR_LENGTH		32765
+
+// When transferring a DT_STRING string, this is the max size (we 
+// leave space for a NULL byte).
+#define MAX_DT_STRING_LENGTH		32766
+
+// A default LongReadLen of 64K is inconvenient.
+#define DEFAULT_LONG_READ_LENGTH	(1024*1024)
+
+#define MAX_TIME_STRING_LENGTH		60
+#ifndef DT_BASE100
+    #define DT_BASE100 492
+#endif
+
+typedef char a_tempvar_name[32];
+
 typedef struct imp_fbh_st imp_fbh_t;
 
 /* Define dbh implementor data structure */
@@ -33,6 +52,7 @@ struct imp_dbh_st {
     unsigned long	available_cursors_size;
     unsigned long	*available_cursors;
     unsigned long	next_cursor_id;
+    unsigned long	next_tempvar_id;
 };
 
 struct imp_drh_st {
@@ -71,6 +91,8 @@ struct phs_st {	/* scalar placeholder EXPERIMENTAL	*/
     IV			sql_type;
     IV			in_ordinal;
     IV			out_ordinal;
+    unsigned long	tempvar_id;
+    a_tempvar_name	tempvar_name;
 };
 
 void	ssa_error _((SV *h, SQLCA *sqlca, an_sql_code sqlcode, char *what));

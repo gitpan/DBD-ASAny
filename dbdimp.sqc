@@ -83,7 +83,7 @@ ssa_error( SV *h, SQLCA *sqlca, an_sql_code sqlcode, char *what )
     DBIh_EVENT2(h, ERROR_event, DBIc_ERR(imp_xxh), errstr);
     if( DBIS->debug >= 2 ) {
 	fprintf( DBILOGFP, "%s error %d recorded: %s\n",
-		 what, sqlca->sqlcode, SvPV(errstr,na) );
+		 what, (sqlca?sqlca->sqlcode:sqlcode), SvPV(errstr,na) );
     }
 }
 
@@ -112,6 +112,7 @@ EXEC SQL END DECLARE SECTION;
     imp_dbh->available_cursors_size = 0;
     imp_dbh->available_cursors_top = 0;
     imp_dbh->next_cursor_id = 1;
+    imp_dbh->next_tempvar_id = 1;
 
     conn_str = uid;	// we use the uid field to contain the entire connection string
     // printf( "Connect string: %s\n", conn_str );
@@ -124,6 +125,8 @@ EXEC SQL END DECLARE SECTION;
 
     DBIc_IMPSET_on(imp_dbh);	/* imp_dbh set up now			*/
     DBIc_ACTIVE_on(imp_dbh);	/* call disconnect before freeing	*/
+    DBIc_LongReadLen(imp_dbh) = DEFAULT_LONG_READ_LENGTH;
+    DBIc_off(imp_dbh,DBIcf_LongTruncOk);
 
     return( 1 );
 }
@@ -296,7 +299,7 @@ void
 dbd_preparse( imp_sth_t *imp_sth, char *statement )
 /*************************************************/
 {
-    bool 	in_literal = FALSE;
+    int 	in_literal = FALSE;
     char 	*src, *start, *dest;
     phs_t 	phs_tpl;
     SV 		*phs_sv;
@@ -313,7 +316,7 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
  
     /* initialise phs ready to be cloned per placeholder	*/
     memset( &phs_tpl, '\0', sizeof(phs_tpl) );
-    phs_tpl.ftype = DT_STRING;	/* VARCHAR2 */
+    phs_tpl.ftype = DT_VARCHAR;
 
     src  = statement;
     dest = imp_sth->statement;
@@ -367,6 +370,7 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
 	}
 	phs_tpl.in_ordinal = curr_ordinal;
 	phs_tpl.out_ordinal = 0;
+	phs_tpl.tempvar_id = 0;
 	phs_tpl.sv = &sv_undef;
 	phs_sv = newSVpv( (char*)&phs_tpl, sizeof(phs_tpl) );
 	if( ph_name == NULL ) {
@@ -453,6 +457,97 @@ find_output_ordinal( imp_sth_t 	*imp_sth, char *name, int input_ordinal )
     return( output_ordinal );
 }
 
+static void
+build_tempvar_name( a_tempvar_name name, unsigned long tempvar_id )
+/*****************************************************************/
+{
+    sprintf( name, "_TMP_%d", tempvar_id );
+}
+
+
+static void
+drop_tempvar( imp_dbh_t *imp_dbh, phs_t *phs )
+/********************************************/
+{
+    char		_statement[128];
+	
+    sprintf( _statement, "DROP VARIABLE %s", phs->tempvar_name );
+    EXEC SQL EXECUTE IMMEDIATE :_statement;
+    phs->tempvar_id = 0;
+    *phs->tempvar_name = '\0';
+}
+
+static int
+create_tempvar( imp_dbh_t *imp_dbh, SV *sth, imp_sth_t *imp_sth, phs_t *phs, void *value_ptr, STRLEN value_len )
+/**************************************************************************************************************/
+{
+    char 			*var_name = phs->tempvar_name;
+    long			remain;
+    long			chunk;
+    char			_statement[128];
+    a_sql_statement_number	stmt_number;
+    SQLDA			append_sqlda;
+    short			ind;
+
+EXEC SQL BEGIN DECLARE SECTION;
+    DECL_BINARY(32000)		piece;
+EXEC SQL END   DECLARE SECTION;
+	
+    phs->tempvar_id = imp_dbh->next_tempvar_id++;
+    build_tempvar_name( var_name, phs->tempvar_id );
+    if( phs->ftype == DT_BINARY ) {
+	sprintf( _statement, "CREATE VARIABLE %s LONG BINARY", phs->tempvar_name );
+    } else {
+	sprintf( _statement, "CREATE VARIABLE %s LONG VARCHAR", phs->tempvar_name );
+    }
+    EXEC SQL EXECUTE IMMEDIATE :_statement;
+    if( SQLCODE != 0 ) {
+	ssa_error( sth, SQLCAPTR, SQLE_ERROR, "create variable failed" ); 
+	phs->tempvar_id = 0;
+	return( FALSE );
+    }
+    
+    sprintf( _statement, "SET %s = %s || ?", phs->tempvar_name, phs->tempvar_name );
+    EXEC SQL PREPARE :stmt_number from :_statement;
+    if( SQLCODE != 0 ) {
+	ssa_error( sth, SQLCAPTR, SQLE_ERROR, "prepare append for tempvar failed" );
+	drop_tempvar( imp_dbh, phs );
+	return( FALSE );
+    }
+
+    ind = 0;
+    memcpy( append_sqlda.sqldaid, "SQLDA   ", 8 );
+    append_sqlda.sqldabc = sizeof(SQLDA);
+    append_sqlda.sqln = 1;
+    append_sqlda.sqld = 1;
+    if( phs->ftype == DT_BINARY ) {
+	append_sqlda.sqlvar[0].sqltype = DT_BINARY;
+    } else {
+	append_sqlda.sqlvar[0].sqltype = DT_VARCHAR;
+    }
+    append_sqlda.sqlvar[0].sqlind  = &ind;
+    append_sqlda.sqlvar[0].sqldata = &piece;
+    append_sqlda.sqlvar[0].sqllen  = sizeof(piece);
+    for( remain=value_len; remain>0; remain-=chunk, value_ptr=(void *)((char *)value_ptr+chunk) ) {
+	chunk = remain;
+	if( chunk > sizeof(piece.array) ) {
+	    chunk = sizeof(piece.array);
+	}
+	piece.len = chunk;
+	memcpy( piece.array, value_ptr, chunk );
+	EXEC SQL EXECUTE :stmt_number USING DESCRIPTOR "&append_sqlda";
+	if( SQLCODE != 0 ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "prepare append for tempvar failed" );
+	    drop_tempvar( imp_dbh, phs );
+	    EXEC SQL DROP STATEMENT :stmt_number;
+	    return( FALSE );
+	}
+    }
+    EXEC SQL DROP STATEMENT :stmt_number;
+    return( TRUE );
+}
+
+
 int
 dbd_bind_ph( SV		*sth,
 	     imp_sth_t 	*imp_sth,
@@ -464,6 +559,7 @@ dbd_bind_ph( SV		*sth,
 	     IV 	maxlen )
 /******************************/
 {
+    D_imp_dbh_from_sth;
     SV 			**svp;
     STRLEN 		name_len;
     char 		*name;
@@ -521,9 +617,16 @@ dbd_bind_ph( SV		*sth,
 
     phs = (phs_t*)((void*)SvPVX(*svp));		/* placeholder struct	*/
 
+    if( sql_type == SQL_BINARY 	  	||
+	sql_type == SQL_VARBINARY 	||
+	sql_type == SQL_LONGVARBINARY ) {
+	phs->ftype = DT_BINARY;
+    } else {
+	phs->ftype = DT_STRING;
+    }
+
     if( phs->sv == &sv_undef ) {	 /* first bind for this placeholder	*/
 	phs->sv = newSV(0);
-	phs->ftype = DT_STRING;
 	phs->is_inout = is_inout;
 	phs->maxlen = maxlen;
 	phs->sql_type = sql_type;
@@ -533,9 +636,6 @@ dbd_bind_ph( SV		*sth,
     } else if( is_inout != phs->is_inout ) {
 	croak( "Can't rebind or change param %s in/out mode after first bind (%d => %d)",
 		name, phs->is_inout , is_inout );
-    } else if( sql_type != phs->sql_type ) {
-	croak( "Can't change TYPE of param %s to %d after initial bind",
-		name, sql_type );
     }
 
     if( !is_inout ) {
@@ -565,19 +665,16 @@ dbd_bind_ph( SV		*sth,
 	(void)SvUPGRADE( phs->sv, SVt_PV );
     }
 
+    if( phs->tempvar_id != 0 ) {
+	drop_tempvar( imp_dbh, phs );
+    }
+
     if( SvOK(phs->sv) ) {
 	value_ptr = SvPV( phs->sv, value_len );
 	phs->indp = 0;
-
-	/* Since we don't support LONG VAR types we must check	*/
-	/* for lengths too big to pass to obndrv as an sword.	*/
-	// FIXME: SWORDMAXVAL ???
-#ifndef SWORDMAXVAL
-	#define SWORDMAXVAL 32768
-#endif
-	if( value_len > SWORDMAXVAL ) {	/* generally INT_MAX	*/
+	if( is_inout && value_len > MAX_DT_VARCHAR_LENGTH ) {
 	    croak( "bind_param %s value is too long (%d bytes, max %d)",
-		   name, value_len, SWORDMAXVAL );
+		   name, value_len, MAX_DT_VARCHAR_LENGTH );
 	}
     } else {
 	value_ptr = "";
@@ -585,21 +682,52 @@ dbd_bind_ph( SV		*sth,
 	phs->indp = -1;
     }
 
-    if( phs->in_ordinal == 0) {
+    if( phs->in_ordinal == 0 ) {
 	croak( "bind_param internal error: unknown in_ordinal for '%s'\n", name );
     }
+
+    if( phs->is_inout && phs->out_ordinal == 0 ) {
+	croak( "bind_param internal error: unknown in_ordinal for '%s'\n", name );
+    }
+
     var = &imp_sth->input_sqlda->sqlvar[phs->in_ordinal-1];
 
     if( DBIS->debug >= 2 ) {
 	fprintf( DBILOGFP, "Binding input hostvar '%s' to sqlvar %d('%s')\n", name, phs->in_ordinal, var->sqlname.data );
     }
-    var->sqltype = phs->ftype;
-    var->sqllen = value_len;
-    var->sqldata = value_ptr;
-    *var->sqlind = phs->indp;
 
-    if( phs->is_inout && phs->out_ordinal == 0 ) {
-	croak( "bind_param internal error: unknown in_ordinal for '%s'\n", name );
+    *var->sqlind = phs->indp;
+    if( phs->ftype == DT_BINARY && value_len <= MAX_DT_VARCHAR_LENGTH ) {
+	// Short binary fields go the the engine as DT_BINARY which must be
+	// preceded with a 2-byte length so we need to allocate a buffer and copy
+	// the data.
+	if( (var->sqltype&DT_TYPES) == DT_BINARY ) {
+	    var->sqldata = saferealloc( var->sqldata, value_len+sizeof(short) );
+	} else {
+	    var->sqldata = safemalloc( value_len+sizeof(short) );
+	}
+	var->sqltype = phs->ftype;	// must come after the logic above
+	var->sqllen = value_len + sizeof(short);
+	*(short *)var->sqldata = value_len;
+	memcpy( (short *)var->sqldata + 1, value_ptr, value_len );
+    } else {
+	// Everything else goes out as DT_STRING or DT_VARIABLE in which case
+	// we just point to memory that is already allocated.
+	if( (var->sqltype&DT_TYPES) == DT_BINARY ) {
+	    safefree( var->sqldata );
+	}
+	if( value_len <= MAX_DT_STRING_LENGTH ) {
+	    var->sqltype = phs->ftype;
+	    var->sqldata = value_ptr;
+	    var->sqllen = value_len;
+	} else {
+	    if( !create_tempvar( imp_dbh, sth, imp_sth, phs, value_ptr, value_len ) ) {
+		return( FALSE );
+	    }
+	    var->sqltype = DT_VARIABLE;
+	    var->sqldata = (void *)phs->tempvar_name;
+	    var->sqllen = strlen( phs->tempvar_name );
+	}
     }
 
     return( 1 );
@@ -614,6 +742,7 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
     int				num_fields;
     a_sql_statement_number 	stmt_number;
     int				sqlda_size;
+    I32				max_len;
 
     if( imp_sth->done_desc ) {
 	return( 1 );	/* success, already done it */
@@ -672,36 +801,71 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	fprintf( DBILOGFP, "\nOutput SQLDA:\n" );
 	for( i=0; i<imp_sth->output_sqlda->sqld; i++ ) {
 	    struct sqlvar	*var = &imp_sth->output_sqlda->sqlvar[i];
-	    fprintf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
+	    fprintf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s, len %d\n",
+		     i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data, var->sqllen );
 	}
     }
 
     num_fields = imp_sth->output_sqlda->sqld;
     DBIc_NUM_FIELDS(imp_sth) = num_fields;
 
+    max_len = DBIc_LongReadLen(imp_sth);
+    if( max_len < 0 || max_len > MAX_DT_VARCHAR_LENGTH ) {
+	max_len = MAX_DT_VARCHAR_LENGTH;
+    }
     imp_sth->has_output_params = 0;
     for( i=0; i<num_fields; i++ ) {
 	struct sqlvar	*var = &imp_sth->output_sqlda->sqlvar[i];
+	short		original_type;
 
 	if( (*var->sqlind)&DT_PROCEDURE_OUT ) {
 	    ++imp_sth->has_output_params;
 	}
-	switch( var->sqltype&DT_TYPES ) {
-	    case DT_SMALLINT :
-	    case DT_INT      :
-	    case DT_FLOAT    :
-	    case DT_DOUBLE   :
-	    case DT_TINYINT  :
+	original_type = var->sqltype&DT_TYPES;
+	switch( original_type ) {
+	    case DT_TINYINT	:
+	    case DT_SMALLINT	:
+	    case DT_INT		:
+	    case DT_BIT		:
+	    case DT_UNSINT   	:
+	    case DT_UNSSMALLINT :
+	    case DT_FLOAT	:
+	    case DT_DOUBLE	:
+		var->sqllen = sqlda_storage( imp_sth->output_sqlda, i );
 		break;
 
-	    default	     :
-		var->sqllen = sqlda_string_length( imp_sth->output_sqlda, i );
+	    case DT_DECIMAL	:
+	    case DT_BASE100	:
+		var->sqllen = sqlda_string_length( imp_sth->output_sqlda, i )+sizeof(short);
 		var->sqltype &= ~DT_TYPES;
 		var->sqltype |= DT_VARCHAR;
 		break;
+
+	    case DT_DATE	:
+	    case DT_TIME	:
+	    case DT_TIMESTAMP	:
+	    case DT_TIMESTAMP_STRUCT:
+		var->sqllen = MAX_TIME_STRING_LENGTH+sizeof(short);
+		var->sqltype &= ~DT_TYPES;
+		var->sqltype |= DT_VARCHAR;
+		break;
+
+	    default		:
+		/* These should all be string-like things */
+		if( var->sqllen > (short)max_len ) {
+		    var->sqllen = (short)max_len;
+		}
+		var->sqllen += sizeof( short );
+		var->sqltype &= ~DT_TYPES;
+		if( original_type == DT_BINARY || original_type == DT_LONGBINARY ) {
+		    var->sqltype |= DT_BINARY;
+		} else {
+		    var->sqltype |= DT_VARCHAR;
+		}
+		break;
 	}
+	var->sqldata = safemalloc( var->sqllen );
     }
-    fill_sqlda( imp_sth->output_sqlda );
 
     return( 1 );
 }
@@ -750,31 +914,106 @@ assign_from_sqlvar( SV *sv, struct sqlvar *var )
     short	fetched_len;
 
     switch( var->sqltype&DT_TYPES ) {
-	case DT_SMALLINT :
-	    sv_setiv( sv, (IV)(*(short *)var->sqldata) );
-	    break;
-
-	case DT_INT      :
-	    sv_setiv( sv, (IV)(*(int *)var->sqldata) );
-	    break;
-
-	case DT_FLOAT    :
-	    sv_setnv( sv, (double)(*(float *)var->sqldata) );
-	    break;
-
-	case DT_DOUBLE   :
-	    sv_setnv( sv, *(double *)var->sqldata );
-	    break;
-
-	case DT_TINYINT	 :
+	case DT_TINYINT		:
 	    sv_setiv( sv, (IV)(*(char *)var->sqldata) );
 	    break;
 
-	default		 :
+	case DT_SMALLINT	:
+	    sv_setiv( sv, (IV)(*(short *)var->sqldata) );
+	    break;
+
+	case DT_INT		:
+	    sv_setiv( sv, (IV)(*(int *)var->sqldata) );
+	    break;
+
+	case DT_BIT		:
+	    sv_setuv( sv, (UV)(*(unsigned char *)var->sqldata) );
+	    break;
+
+	case DT_UNSSMALLINT	:
+	    sv_setuv( sv, (UV)(*(unsigned short *)var->sqldata) );
+	    break;
+
+	case DT_UNSINT		:
+	    sv_setuv( sv, (UV)(*(unsigned int *)var->sqldata) );
+	    break;
+
+	case DT_FLOAT		:
+	    sv_setnv( sv, (double)(*(float *)var->sqldata) );
+	    break;
+
+	case DT_DOUBLE		:
+	    sv_setnv( sv, *(double *)var->sqldata );
+	    break;
+
+	default			:
 	    // All other types are fetched as strings
 	    fetched_len = *(short *)var->sqldata;
 	    sv_setpvn( sv, (char *)var->sqldata + sizeof(short), fetched_len );
     }
+}
+
+static int
+assign_blob( imp_dbh_t *imp_dbh, imp_sth_t *imp_sth, SV *sv, int col )
+/********************************************************************/
+{
+    struct sqlvar	*var = &imp_sth->output_sqlda->sqlvar[col];
+    short		fetched_len;
+    I32			max_len;
+    I32			len;
+
+EXEC SQL BEGIN DECLARE SECTION;
+    DECL_BINARY(32000)	piece;
+    short		ind;
+    long		offset;
+    long		crsr_col;
+    char		*crsr_name;
+EXEC SQL END DECLARE SECTION;
+
+    max_len = DBIc_LongReadLen(imp_sth);
+    fetched_len = *(short *)var->sqldata;
+    if( fetched_len > max_len && !DBIc_has(imp_sth,DBIcf_LongTruncOk) ) {
+printf( "col=%d, fetched_len=%d, max_len=%d\n", col, fetched_len, max_len );
+printf( "Line: %d\n", __LINE__ );
+printf( "Value: %s\n", (char *)(((short *)var->sqldata)+1) );
+	return( FALSE );
+    }
+
+    if( fetched_len >= max_len ) {
+	sv_setpvn( sv, (char *)var->sqldata + sizeof(short), max_len );
+	return( TRUE );
+    }
+
+    crsr_name = imp_sth->cursor_name;
+    crsr_col = col+1;
+    sv_setpvn( sv, (char *)var->sqldata + sizeof(short), fetched_len );
+    for( offset=fetched_len; offset < max_len; offset += len ) {
+	EXEC SQL GET DATA :crsr_name COLUMN :crsr_col OFFSET :offset INTO :piece:ind;
+        if( SQLCODE < 0 || (SQLCODE != 0 && SQLCODE !=SQLE_TRUNCATED) ) {
+printf( "Line: %d\n", __LINE__ );
+	    return( FALSE );
+	}
+	if( ind < 0 ) {
+	    // NULL -- shouldn't get here
+printf( "Line: %d\n", __LINE__ );
+	    return( FALSE );
+	}
+	len = piece.len;
+	if( offset + len > max_len ) {
+	    if( DBIc_has(imp_sth,DBIcf_LongTruncOk) ) {
+		len = max_len - offset;
+	    } else {
+printf( "Line: %d\n", __LINE__ );
+		SQLCODE = SQLE_TRUNCATED;
+		return( FALSE );
+	    }
+	}
+	sv_catpvn( sv, (char *)piece.array, len );
+	if( ind == 0 ) {
+	    break;
+	}
+    }
+    return( TRUE );
 }
 
 static void
@@ -806,9 +1045,7 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
     dTHR;
     D_imp_dbh_from_sth;
     a_sql_statement_number 	stmt_number;
-    EXEC SQL BEGIN DECLARE SECTION;
     char			*crsr_name;
-    EXEC SQL END DECLARE SECTION;
 
     if( !imp_sth->done_desc ) {
 	/* describe and allocate storage for results		*/
@@ -889,16 +1126,15 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
     if( SQLCODE ) {
 	if( SQLCODE == SQLE_NOTFOUND ) {
 	    sv_setiv( DBIc_ERR(imp_sth), 0 );	/* just end-of-fetch	*/
-	} else {
+	    return( Nullav );
+	} else if( SQLCODE != SQLE_TRUNCATED ) {
 	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "fetch failed" );
+	    if( debug >= 3 ) {
+		fprintf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
+	    }
+	    return( Nullav );
 	}
-
-	if( debug >= 3 ) {
-	    fprintf( DBILOGFP, "    dbd_st_fetch failed, rc=%d", SQLCODE );
-	}
-	return( Nullav );
     }
-
     av = DBIS->get_fbav( imp_sth );
     num_fields = AvFILL( av ) + 1;
 
@@ -912,9 +1148,13 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
 	SV 		*sv = AvARRAY(av)[i]; /* Note: we (re)use the SV in the AV	*/
 
 	indicator = *var->sqlind;
-	if( indicator >= 0 ) {
-	    // FIXME: handle truncated fields
+	if( indicator == 0 ) {
 	    assign_from_sqlvar( sv, var );
+	} else if( indicator > 0 ) {
+	    if( !assign_blob( imp_dbh, imp_sth, sv, i ) ) {
+		ssa_error( sth, SQLCAPTR, SQLE_ERROR, "assign_blob failed" );
+		return( Nullav );
+	    }
 	} else 	if( *var->sqlind == -1 || *var->sqlind <-2 ) {	
 	    /* field is null - return undef */
 	    (void)SvOK_off(sv);
@@ -987,6 +1227,24 @@ dbd_st_finish( SV *sth, imp_sth_t *imp_sth )
     return( 1 );
 }
 
+static void
+my_free_sqlda( SQLDA *sqlda )
+/***************************/
+{
+    int		i;
+
+    for( i=0; i<sqlda->sqln; i++ ) {
+	if( sqlda->sqlvar[i].sqldata != NULL ) {
+	    if( (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_BINARY ||
+	        (sqlda->sqlvar[i].sqltype&DT_TYPES) == DT_VARCHAR ) {
+		safefree( sqlda->sqlvar[i].sqldata );
+	    }
+	    sqlda->sqlvar[i].sqldata = NULL;
+	}
+    }
+    free_sqlda( sqlda );
+}
+
 
 void
 dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
@@ -994,12 +1252,14 @@ dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
 {
     D_imp_dbh_from_sth;
     char			*crsr_name;
+    int				num_fields;
+    int				i;
 
     dbd_st_finish( sth, imp_sth );
 
     /* Free off contents of imp_sth	*/
-    free_sqlda( imp_sth->input_sqlda );
-    free_filled_sqlda( imp_sth->output_sqlda );
+    my_free_sqlda( imp_sth->input_sqlda );
+    my_free_sqlda( imp_sth->output_sqlda );
 
     Safefree(imp_sth->statement);
 
@@ -1016,6 +1276,9 @@ dbd_st_destroy( SV *sth, imp_sth_t *imp_sth )
 	    if( sv != &sv_undef ) {
 		phs_tpl = (phs_t*)SvPVX(sv);
 		sv_free(phs_tpl->sv);
+		if( phs_tpl->tempvar_id != 0 ) {
+		    drop_tempvar( imp_dbh, phs_tpl );
+		}
 	    }
 	}
 	sv_free((SV*)imp_sth->bind_names);

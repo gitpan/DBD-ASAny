@@ -1,3 +1,17 @@
+Changes in DBD::ASAny 1.06	10th March 2000
+  Added support for blobs and long strings. Values transferred to
+    or from the engine can be up to 2GB in size. Default LongReadLen
+    value for DBD::ASAny is 1MB. There is no default limit to
+    the length of string that can be written (there appears to be
+    no 'LongWriteLen' attribute in DBI).
+  Added support for treating strings as binary data. When sending
+    data to the engine (for an insert or update), the user must
+    provide the DBI::SQL_BINARY or similar type attribute in
+    a bind_param call. For fetching data, DBD::ASAny automatically
+    detects that a column is binary. If binary data is treated as
+    text it may be subjected to character set translation.
+  Removed reference to GNU public license/Artistic license.
+
 Changes in DBD::ASAny 1.05	25th January 2000
 
   Added Sybase license agreement
