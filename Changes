@@ -1,0 +1,30 @@
+Changes in DBD::ASAny 1.04	19th November 1999
+
+  Fixed inout parameter support.
+  Moved changes info from Makefile.PL to this file.
+
+Changes in DBD::ASAny 1.03	9th November 1999
+
+  Driver now builds on HPUX, AIX, Linux with native and GNU compilers.
+  Dynamically resize SQLDA for bind variables or output values if the
+    default size is not large enough.
+  Avoid "memory leak" caused by dblib holding onto cursor information
+    so that the cursor can be reopend without being redeclared.
+
+Changes in DBD::ASAny 1.02	21st October 1999
+
+  Driver should now be thread safe & it builds with the
+    threaded version of perl; however, perl threads and/or DBI
+    in a threaded environment is very unstable. Simple multithreaded
+    tests easily crash perl.
+
+Changes in DBD::ASAny 1.01	5th August 1999
+
+  Initial Win32 support by Matthew C. Keranen (mck@iag.net).
+  Win32 version requires ActivePerl (www.activestate.com).
+
+Changes in DBD::ASAny 1.00	8th December 1998
+
+  Changed SQL Anywhere driver (DBD::SQLAny) into Adaptive Server Anywhere
+    driver(DBD::ASAny)
+
