@@ -1,17 +1,17 @@
 DBD::ASAny -- an Adaptive Server Anywhere interface for Perl 5.
 
-   Portions Copyright (c) 1994,1995,1996       Tim Bunce
-   Portions Copyright (c) 1996,1998,1999,2000  Sybase Inc.
+   Portions Copyright (c) 1994,1995,1996            Tim Bunce
+   Portions Copyright (c) 1996,1998,1999,2000,2003  Sybase Inc.
 
    For license information, please see license.txt included in this
    distribution.
 
 *BEFORE* BUILDING, TESTING AND INSTALLING this you will need to:
 
-    Build, test and install Perl 5 (at least 5.002beta2).
+    Build, test and install Perl 5 (at least 5.6.0 is recommended).
     It is very important to test it and install it!
 
-    Build, test and install the DBI module (at least DBI 1.13).
+    Build, test and install the DBI module (at least DBI 1.34 is recommended).
     It is very important to test it and install it!
 
     Remember to *read* the DBI README file!
@@ -27,19 +27,10 @@ Building:
 	make install
     
     On Win32:
-	[ requires Microsoft C and ActiveState's ActivePerl (www.activestate.com) ]
-	NOTE: ActivePerl 5.6.0 build 616 or later is required.
+	[ requires Microsoft C and ActiveState's ActivePerl
+	  (www.activestate.com) ]
 
-	NOTE: If you see errors related to a missing PerlCRT.DLL you
-	      probably have a DBI module compiled with an older
-	      ActivePerl. When I upgraded to 616 by overwriting my old
-	      ActivePerl installation directory, I was unable to
-	      install a new DBI module using ppm. To avoid the 'missing
-	      PerlCRT.DLL' errors, either download, build and install
-	      the DBI module yourself or do a full uninstall of
-	      ActivePerl, delete the old ActivePerl installation tree,
-	      then install a new ActivePerl and a new DBI module using
-	      ppm.
+	NOTE: ActivePerl 5.6.0 build 616 or later is required.
 
 	perl Makefile.PL
 	nmake
@@ -54,129 +45,56 @@ Building:
 
 Notes:
 
-0.  The ASAny DBD driver is NOT supported by Sybase technical
-    support. If you have difficulties, please try to solve them
-    yourself *before* you contact the author (smirnios@sybase.com). If
-    you make additions, improvements or bug fixes, please let the
-    author know so that the changes can be incorporated into the next
-    version.
+1.  ASA connection parameters can be passed to DBD::ASAny by placing
+    the list of parameters after 'DBI:ASAny:' in the first parameter
+    to connect(). The connection parameters are specified as a list of
+    LABEL=value pairs that are delimited by semicolons.
 
-1.  The connect() method for Adaptive Server Anywhere now accepts
-    connection parameters in a manner that is more consistent with
-    other drivers and which should be backward compatible in almost
-    all cases with previous DBD::ASAny versions. The recommended way
-    of specifying a connection string for ASA is to append it to the
-    end of the first connection parameter as in the following example:
+    If you are not familiar with ASA connection parameters, *please*
+    refer to the ASA documentation.
 
-	$dbh = DBI->connect( 'DBI:ASAny:UID=dba;PWD=sql;ENG=asademo', '', '' );
+    Example:
+
+	$dbh = DBI->connect( 'DBI:ASAny:ENG=asademo;UID=dba;PWD=sql', '', '' );
     
-    For backward compatibility reasons, the ASA connection string that is used
-    by the driver is essentially the concatenation of the first three parameters
-    with the following exceptions:
-	1. The 'DBI:ASAny:' prefix of the first parameter is removed (by DBI).
-	2. 'ENG=' is prefixed to the first parameter if it begins with a
-	   string which is not in 'LABEL=value' format.
-	3. 'UID=' is prefixed to the second parameter if the string does not already
-	   appear to use 'LABEL=value' format.
-	4. 'PWD=' is prefixed to the third parameter if it is non-empty.
-	
-    Examples:
-	NOTE: these do not represent the recommended way of specifying a connection
-	      string for ASA! These examples are only provided to help understand
-	      how the connect() method is compatible with older scripts.
+    If the second parameter is nonblank, it is assumed to be a user
+    name and UID=parameter2 will be appended to the ASA connection
+    string.
 
-	$dbh = DBI->connect( 'DBI:ASAny:asademo', 'dba', 'sql' );
-	-> "ENG=asademo;UID=dba;PWD=sql"
+    Similarly, if the third parameter is nonblank, it is assumed to be
+    a password and PWD=parameter3 will be appended to the ASA
+    connection string.
 
-	$dbh = DBI->connect( 'DBI:ASAny:asademo;DBF=asademo.db', 'dba', 'sql' );
-	-> "ENG=asademo;DBF=asademo.db;UID=dba;PWD=sql"
+    The following is equivalent to the example above:
 
-	$dbh = DBI->connect( 'DBI:ASAny:', 'dba', 'sql' );
-	-> "UID=dba;PWD=sql"
-
-	$dbh = DBI->connect( 'DBI:ASAny:', 'UID=dba;PWD=sql', '' );
-	-> "UID=dba;PWD=sql"
-
-	[really old] $dbh = DBI->connect( 'asademo', 'dba', 'sql', 'ASAny' );
-	-> "ENG=asademo;UID=dba;PWD=sql"
-
-	[really old] $dbh = DBI->connect( 'DBF=asademo.db', 'UID=dba;PWD=sql', '', 'ASAny' );
-	-> "DBF=asademo.db;UID=dba;PWD=sql"
+	$dbh = DBI->connect( 'DBI:ASAny:ENG=asademo', 'dba', 'sql' );
+    
 
 2.  Before running 'make test', a copy of the asademo.db file located
     in the ASA directory should be in your current directory. There
     have been problems autostarting and autostopping engines in rapid
-    succession on UNIX. If you encounter a problem autostarting the
-    engine, start the engine on asademo.db before running the tests.
+    succession on UNIX with old versions of ASA. If you encounter a
+    problem autostarting the engine, start the engine on
+    asademo.db. Make sure the server & database names are both
+    'asademo'. Icons installed with recent ASA versions for Windows
+    start the demo database under a different name (such as
+    'asademo9') -- do not use these icons to start the database.
 
-3.  The ASAny DBD driver should now be thread-safe; however, simple
-    multi-threaded tests can easily crash perl. It is suspected that
-    the current implementation of Perl threads and/or DBI in a
-    threaded environment is the cause of the instability, not the
-    driver.
+3.  The ASAny DBD driver is thread-safe when using Perl ithreads.
 
-
-So what is implemented?
-
-Let's take the list at the bottom of DBI.pm:
-
-$dbh = DBI->connect($data_source, $username, $auth);
-$dbh = DBI->connect($data_source, $username, $auth, \%attr);
-
-$rc  = $dbh->disconnect;
-
-$rv  = $dbh->do($statement);
-$rv  = $dbh->do($statement, \%attr);                    %attr is ignored
-$rv  = $dbh->do($statement, \%attr, @bind_values);      %attr is ignored
-
-$sth = $dbh->prepare($statement);
-$sth = $dbh->prepare($statement, \%attr);               %attr is ignored
-
-$rc = $sth->bind_col($col_num, \$col_variable);
-$rc = $sth->bind_columns(\%attr, @list_of_refs_to_vars_to_bind);
-
-$rv = $sth->bind_param($param_num, $bind_value);
-$rv = $sth->bind_param($param_num, $bind_value, $bind_type);
-$rv = $sth->bind_param($param_num, $bind_value, \%attr);
-
-$rv = $sth->bind_param_inout($param_num, $bind_value);
-$rv = $sth->bind_param_inout($param_num, $bind_value, $bind_type);
-$rv = $sth->bind_param_inout($param_num, $bind_value, \%attr);
-
-$rv = $sth->execute;
-$rv = $sth->execute(@bind_values);
-
-@row_ary  = $sth->fetchrow_array;
-$ary_ref  = $sth->fetchrow_arrayref;
-$hash_ref = $sth->fetchrow_hashref;
-
-$rc = $sth->finish;
-
-$rv = $sth->rows;
-
-$rc  = $dbh->commit;
-$rc  = $dbh->rollback;
-
-$sql = $dbh->quote($string);
-
-$rc  = $h->err;
-$str = $h->errstr;
-$rv  = $h->state;                               Not supported
-
-
-$sth->{NAME}       (\@)			Yes
-$sth->{NULLABLE}   (\@)			Yes
-$sth->{TYPE}       (\@)			Yes
-$sth->{ASATYPE}    (\@)			Yes
-$sth->{PRECISION}  (\@)			Yes
-$sth->{SCALE}      (\@)			Yes
-
-$sth->{NUM_OF_FIELDS}	($)		Yes
-$sth->{NUM_OF_PARAMS}	($)		Yes
-$sth->{CursorName}	($)		Yes
-$sth->{Statement}	($)		Yes
-$sth->{RowsInCache}	($)		Yes
-$dbh->{LongReadLen}	($)		Yes
+4.  Prepared statements are not dropped from the ASA server until the
+    statement handle is destroyed in the perl script. Calling finish()
+    is not sufficient to drop the handle that the server is holding
+    onto -- use "undef" instead or reuse the same perl variable for
+    another handle. To help detect handle leaks in client
+    applications, ASA by default limits the number of prepared
+    statements and cursors that any connection can hold at one time to
+    50 of each. If that limit is exceeded, a "Resource governor
+    ... exceeded" error is reported. If you encounter this error, make
+    sure you are dropping all of your statement handles and, if so,
+    consult the ASA documentation for the MAX_CURSOR_COUNT and
+    MAX_STATEMENT_COUNT options. Be careful when using
+    prepare_cached() since the cache will hold onto statement handles.
 
 ---------------------------------------------------------------
 

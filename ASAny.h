@@ -25,6 +25,8 @@ SV  *dbd_db_FETCH_attrib _((SV *dbh, imp_dbh_t *imp_dbh, SV *keysv));
 
 void dbd_preparse( imp_sth_t *imp_sth, char *statement );
 
+int dbd_st_blob_read _(( SV *sth, imp_sth_t *imp_sth,
+		      int field, long offset, long len, SV *destrv, long destoffset ));
 int  dbd_st_prepare _((SV *sth, imp_sth_t *imp_sth, char *statement, SV *attribs));
 int  dbd_st_rows _((SV *sv, imp_sth_t *imp_sth));
 int  dbd_bind_ph _(( SV		*sth,

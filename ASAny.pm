@@ -1,7 +1,7 @@
 require 5.002;
 
 
-$DBD::ASAny::VERSION = '1.12';
+$DBD::ASAny::VERSION = '1.13';
 
 {
     package DBD::ASAny;
@@ -29,6 +29,10 @@ $DBD::ASAny::VERSION = '1.12';
     $err = 0;		# holds error code   for DBI::err    (XXX SHARED!)
     $errstr = "";	# holds error string for DBI::errstr (XXX SHARED!)
     $drh = undef;	# holds driver handle once initialised
+
+    sub CLONE {
+	$drh = undef;
+    }
 
     sub driver {
 	return $drh if $drh;

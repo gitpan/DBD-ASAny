@@ -18,9 +18,12 @@ my $i;
 $| = 1;
 $dsn = 'UID=dba;PWD=sql';
 print "Connecting to Database\n"; 
-$dbh = DBI->connect( 'DBI:ASAny:asademo', $dsn, '', '' );
+$dbh = DBI->connect( "DBI:ASAny:", $dsn );
+printf( "connected\n" );
 die unless $dbh;
-$dbh->{LongReadLen} = $bloblen;
+printf( "hi\n" );
+$dbh->{"LongReadLen"} = $bloblen;
+printf( "hi2\n" );
 
 printf( "Building blob: %d bytes\n", $bloblen );
 $blob1 = '';

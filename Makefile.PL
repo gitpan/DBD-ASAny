@@ -22,6 +22,8 @@ my $dbi_dir      = dbd_dbi_dir();
 my $dbi_arch_dir = dbd_dbi_arch_dir();
 my $os = $^O;
 my $osvers = $Config{osvers};
+my $max_asa_ver = 15;
+my $min_asa_ver = 6;
 $osvers =~ s/^\s*(\d+\.\d+).*/$1/;	# drop sub-sub-version: 2.5.1 -> 2.5
 
 my %opts = (
@@ -57,11 +59,12 @@ print "\nConfiguring DBD::ASAny ...\n";
 
 # --- Where is ASA installed...
 
-my $dblib;
 my $sqlpp_platform;
 
 if( $Config{osname} eq "MSWin32" ) {
     $sqlpp_platform = "WINNT";
+} elsif( $Config{ptrsize} == 8 ) {
+    $sqlpp_platform = "UNIX64";
 } else {
     $sqlpp_platform = "UNIX";
 }
@@ -77,14 +80,17 @@ my $key;
 my $type;
 my $ver;
 if( $Config{osname} eq "MSWin32" ) {
-    foreach $ver ( ("9.0","8.0","7.0","6.0") ) {
-	if( $main::HKEY_CURRENT_USER->Open( "Software\\Sybase\\Adaptive Server Anywhere\\${ver}", $key ) ) {
+    for( $ver=$max_asa_ver; $ver >= $min_asa_ver; $ver-- ) {
+	if( defined $ENV{"ASANY${ver}"} ) {
+	    push( @install_dirs, $ENV{"ASANY${ver}"} );
+	}
+	if( $main::HKEY_CURRENT_USER->Open( "Software\\Sybase\\Adaptive Server Anywhere\\${ver}.0", $key ) ) {
 	    if( $key->QueryValueEx( 'Location', $type, $location ) ) {
 		push( @install_dirs, $location );
 	    }
 	    $key->Close();
 	}
-	if( $main::HKEY_LOCAL_MACHINE->Open( "SOFTWARE\\Sybase\\Adaptive Server Anywhere\\${ver}", $key ) ) {
+	if( $main::HKEY_LOCAL_MACHINE->Open( "SOFTWARE\\Sybase\\Adaptive Server Anywhere\\${ver}.0", $key ) ) {
 	    if( $key->QueryValueEx( 'Location', $type, $location ) ) {
 		push( @install_dirs, $location );
 	    }
@@ -92,14 +98,15 @@ if( $Config{osname} eq "MSWin32" ) {
 	}
     }
 } else {
-    push( @install_dirs, "/opt/SYBSsa9" );
-    push( @install_dirs, "/opt/SYBSasa9" );
-    push( @install_dirs, "/opt/SYBSsa8" );
-    push( @install_dirs, "/opt/SYBSasa8" );
-    push( @install_dirs, "/opt/SYBSsa7" );
-    push( @install_dirs, "/opt/SYBSasa7" );
-    push( @install_dirs, "/opt/SYBSsa6" );
-    push( @install_dirs, "/opt/SYBSasa6" );
+    for( $ver=$max_asa_ver; $ver >= $min_asa_ver; $ver-- ) {
+	if( defined $ENV{"ASANY${ver}"} ) {
+	    push( @install_dirs, $ENV{"ASANY${ver}"} );
+	}
+	push( @install_dirs, "/opt/sybase/SYBSsa$ver" );
+	push( @install_dirs, "/opt/sybase/SYBSasa$ver" );
+	push( @install_dirs, "/opt/SYBSsa$ver" );
+	push( @install_dirs, "/opt/SYBSasa$ver" );
+    }
 }
 
 my $ASA = "";
@@ -113,7 +120,7 @@ foreach $dir ( @install_dirs ) {
     if( $Config{osname} eq "MSWin32" ) {
 	if( -d "${dir}/win32/lib" &&
 	    -d "${dir}/h" ) {
-	    foreach $ver ( (9,8,7,6) ) {
+	    for( $ver=$max_asa_ver; $ver >= $min_asa_ver; $ver-- ) {
 		if( -e "${dir}/win32/dbeng${ver}.exe" ) {
 		    $ASA = $dir;
 		    $asa_version_major = $ver;
@@ -126,7 +133,7 @@ foreach $dir ( @install_dirs ) {
 	if( -d "${dir}/lib" &&
 	    -d "${dir}/bin" &&
 	    -d "${dir}/include" ) {
-	    foreach $ver ( (9,8,7,6) ) {
+	    for( $ver=$max_asa_ver; $ver >= $min_asa_ver; $ver-- ) {
 		if( -e "${dir}/bin/dbeng${ver}" ) {
 		    $ASA = $dir;
 		    $asa_version_major = $ver;
@@ -144,12 +151,6 @@ if( !$found ) {
 }
 
 print "Using ASA version ${asa_version_major} in $ASA\n";
-
-if( $Config{osname} eq "MSWin32" ) {
-    $dblib = "dblibtm";
-} else {
-    $dblib = "dblib${asa_version_major}";
-}
 
 my $is_gcc;
 if( "$Config{cc}" eq "gcc" ||
@@ -177,12 +178,17 @@ if( $Config{osname} eq "MSWin32" ) {
     foreach $libdir ( split( /;/, $ENV{LIB} ) ) {
 	$sysliblist .= qq( -L"$libdir" );
     }
+    $sysliblist .= " -ldblibtm";
 } else {
     $sysliblist .= "-L$ASA/lib ";
     $sysliblist .= "-L$Config{archlibexp}/CORE ";
+    if( $Config{useithreads} ) {
+	$sysliblist .= " -ldblib${asa_version_major}_r -ldbtasks${asa_version_major}_r";
+    } else {
+	$sysliblist .= " -ldblib${asa_version_major} -ldbtasks${asa_version_major}";
+    }
 }
 
-$sysliblist .= " -l${dblib}";
 # On UNIX platforms, leave the perllib symbols unresolved and
 # get them from the perl executable at runtime. Libperl.a is not
 # built as relocatable code so linking against it now will leave
@@ -192,6 +198,7 @@ $opts{CCFLAGS} = $Config{ccflags};
 if( $Config{osname} eq "MSWin32" ) {
     $sysliblist .= " -l${perllib}";
 #    $opts{CCFLAGS} =~ s/-O1//;
+     $opts{CCFLAGS} =~ s/-Gf\s*/-GF /;
 } elsif( "$Config{osname}" eq "solaris" ) {
     $sysliblist .= " -lsocket -lnsl -lm -lc";
     if( $is_gcc ) {
@@ -239,7 +246,7 @@ sub MY::postamble {
     return( dbd_postamble(@_) .
 "
 dbdimp.c: dbdimp.sqc
-	sqlpp -q -n -o ${sqlpp_platform} dbdimp.sqc dbdimp.c
+	sqlpp -r -q -n -o ${sqlpp_platform} dbdimp.sqc dbdimp.c
 " );
 }
 
