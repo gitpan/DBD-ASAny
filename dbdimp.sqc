@@ -1,8 +1,8 @@
 // sqlca.h requires SQLCAPTR to be set appropriately
-#define SQLCAPTR (&imp_dbh->sqlca)
+#define SQLCAPTR (imp_dbh->sqlcap)
 
 EXEC SQL INCLUDE SQLCA;
-EXEC SQL SET SQLCA "(&imp_dbh->sqlca)";
+EXEC SQL SET SQLCA "(imp_dbh->sqlcap)";
 
 #include "ASAny.h"
 
@@ -19,6 +19,8 @@ DBISTATE_DECLARE;
 #define IS_DBI_HANDLE(h) \
     (SvROK(h) && SvTYPE(SvRV(h)) == SVt_PVHV && \
 	SvRMAGICAL(SvRV(h)) && (SvMAGIC(SvRV(h)))->mg_type == 'P')
+
+#define EXTERNAL_CONNECTION( imp_dbh ) (&imp_dbh->sqlca != imp_dbh->sqlcap)
 
 int dbd_describe( SV *sth, imp_sth_t *imp_sth );
 
@@ -70,7 +72,7 @@ ssa_error( SV *h, SQLCA *sqlca, an_sql_code sqlcode, char *what )
 
     if( sqlca ) {	/* is ASAny error (allow for non-ASAny errors) */
 	char 	msg[256];
-	int	len;
+	size_t	len;
 
 	if( sqlerror_message( sqlca, msg, sizeof(msg) ) ) {
 	    len = strlen( msg );
@@ -106,16 +108,29 @@ dbd_db_login( dbh, imp_dbh, dbname, uid, pwd )
 /********************************************/
     SV *dbh;
     imp_dbh_t *imp_dbh;
-    char *dbname;	// Ignored
-    char *uid;		// Actually connection string
+    char *dbname;	// Actually connection string
+    char *uid;		// sqlca pointer for server-side perl or ignored
     char *pwd;		// Ignored
 {
     dTHR;
+    int		sqlca_provided = FALSE;
 EXEC SQL BEGIN DECLARE SECTION; 
     char	*conn_str;
 EXEC SQL END DECLARE SECTION; 
 
-    if( !db_init( SQLCAPTR ) ) {
+    // ASAny.pm ensures that the entire connection string comes through in the dbname field
+    conn_str = dbname;
+    
+    // ASAny.pm will pass a sqlca pointer in the uid field if this 
+    // connect is for server-side perl's default connection.
+    if( uid != NULL && *uid != '\0' ) {
+    	sqlca_provided = TRUE;
+    	sscanf( uid, "%p", &imp_dbh->sqlcap );
+    } else {
+	imp_dbh->sqlcap = &imp_dbh->sqlca;
+    }
+    
+    if( !sqlca_provided && !db_init( SQLCAPTR ) ) {
 	ssa_error( dbh, SQLCAPTR, SQLE_ERROR, "db_init failed" );
     }
     imp_dbh->available_cursors = NULL;
@@ -124,15 +139,20 @@ EXEC SQL END DECLARE SECTION;
     imp_dbh->next_cursor_id = 1;
     imp_dbh->next_tempvar_id = 1;
 
-    // ASAny.pm ensures that the entire connection string comes through in the dbname field
-    conn_str = dbname;
+#if defined( SQLPP_DBLIB_VERSION_SA10 )
+    if( !sqlca_provided ) {
+	db_set_property( SQLCAPTR, DB_SET_PROP_CLIENT_API, "PerlDBD" );
+    }
+#endif
 
 //    printf( "Connect string: %s\n", conn_str );
-    EXEC SQL CONNECT USING :conn_str;
-    if( SQLCODE ) {
-	ssa_error( dbh, SQLCAPTR, SQLE_ERROR, "login failed" );
-	db_fini( SQLCAPTR );
-	return( 0 );
+    if( !sqlca_provided ) {
+	EXEC SQL CONNECT USING :conn_str;
+	if( SQLCODE ) {
+	    ssa_error( dbh, SQLCAPTR, SQLE_ERROR, "login failed" );
+	    db_fini( SQLCAPTR );
+	    return( 0 );
+	}
     }
 
     DBIc_IMPSET_on(imp_dbh);	/* imp_dbh set up now			*/
@@ -177,6 +197,11 @@ dbd_db_disconnect( SV *dbh, imp_dbh_t *imp_dbh )
 /**********************************************/
 {
     dTHR;
+    
+    // don't close the connection if it was opened externally
+    if( EXTERNAL_CONNECTION( imp_dbh ) ) {
+    	return 1;
+    }
 
     /* We assume that disconnect will always work	*/
     /* since most errors imply already disconnected.	*/
@@ -200,11 +225,14 @@ void
 dbd_db_destroy( SV *dbh, imp_dbh_t *imp_dbh )
 /*******************************************/
 {
-    if( DBIc_ACTIVE( imp_dbh ) ) {
-	dbd_db_disconnect( dbh, imp_dbh );
+    // don't close the connection if it was opened externally
+    if( !EXTERNAL_CONNECTION( imp_dbh ) ) {
+	if( DBIc_ACTIVE( imp_dbh ) ) {
+	    dbd_db_disconnect( dbh, imp_dbh );
+	}
+    
+	db_fini( SQLCAPTR );
     }
-
-    db_fini( SQLCAPTR );
     if( imp_dbh->available_cursors != NULL ) {
 	safefree( imp_dbh->available_cursors );
 	imp_dbh->available_cursors= NULL;
@@ -239,7 +267,7 @@ dbd_db_STORE_attrib( SV *dbh, imp_dbh_t *imp_dbh, SV *keysv, SV *valuesv )
 	return FALSE;
     }
     if( cachesv ) { /* cache value for later DBI 'quick' fetch? */
-	hv_store( (HV*)SvRV(dbh), key, kl, cachesv, 0 );
+	hv_store( (HV*)SvRV(dbh), key, (I32)kl, cachesv, 0 );
     }
     return( TRUE );
 }
@@ -263,7 +291,7 @@ dbd_db_FETCH_attrib( SV *dbh, imp_dbh_t *imp_dbh, SV *keysv )
 	return( Nullsv );
     }
     if( cacheit ) {	/* cache for next time (via DBI quick_FETCH)	*/
-	SV **svp = hv_fetch( (HV*)SvRV(dbh), key, kl, 1 );
+	SV **svp = hv_fetch( (HV*)SvRV(dbh), key, (I32)kl, 1 );
 	sv_free( *svp );
 	*svp = retsv;
 	(void)SvREFCNT_inc( retsv );	/* so sv_2mortal won't free it	*/
@@ -325,7 +353,7 @@ void
 dbd_preparse( imp_sth_t *imp_sth, char *statement )
 /*************************************************/
 {
-    int 	in_literal = FALSE;
+    char	quote = '\0';
     char 	*src, *start, *dest;
     phs_t 	phs_tpl;
     SV 		*phs_sv;
@@ -333,7 +361,7 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
     int		curr_ordinal = 1;
     char	_ph_name_buf[10];
     char	*ph_name;
-    int		ph_name_len;
+    size_t	ph_name_len;
     
 
     /* allocate room for copy of statement with spare capacity	*/
@@ -347,10 +375,20 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
     src  = statement;
     dest = imp_sth->statement;
     while( *src ) {
-	if( *src == '\'' ) {
-	    in_literal = ~in_literal;
+	if( *src == '\'' || *src == '\"' ) {
+	    if( quote ) {
+		if( *src == quote ) {
+		    if( src[1] == quote ) {
+			*dest++ = *src++;
+		    } else {
+			quote = '\0';
+		    }
+		}
+	    } else {
+		quote = *src;
+	    }
 	}
-	if( (*src != ':' && *src != '?') || in_literal ) {
+	if( (*src != ':' && *src != '?') || quote ) {
 	    *dest++ = *src++;
 	    continue;
 	}
@@ -404,7 +442,7 @@ dbd_preparse( imp_sth_t *imp_sth, char *statement )
 	    sprintf( ph_name, ":p%d", curr_ordinal );
 	    ph_name_len = strlen( ph_name );
 	}
-	hv_store( imp_sth->bind_names, ph_name, (STRLEN)ph_name_len,
+	hv_store( imp_sth->bind_names, ph_name, (I32)ph_name_len,
 		  phs_sv, 0);
 	++curr_ordinal;
 	/* warn("bind_names: '%s'\n", start);	*/
@@ -487,7 +525,7 @@ static void
 build_tempvar_name( a_tempvar_name name, unsigned long tempvar_id )
 /*****************************************************************/
 {
-    sprintf( name, "_TMP_%d", tempvar_id );
+    sprintf( name, "_TMP_%ld", tempvar_id );
 }
 
 
@@ -554,7 +592,7 @@ EXEC SQL END   DECLARE SECTION;
     append_sqlda.sqlvar[0].sqlind  = &ind;
     append_sqlda.sqlvar[0].sqldata = &piece;
     append_sqlda.sqlvar[0].sqllen  = sizeof(piece);
-    for( remain=value_len; remain>0; remain-=chunk, value_ptr=(void *)((char *)value_ptr+chunk) ) {
+    for( remain=(long)value_len; remain>0; remain-=chunk, value_ptr=(void *)((char *)value_ptr+chunk) ) {
 	chunk = remain;
 	if( chunk > sizeof(piece.array) ) {
 	    chunk = sizeof(piece.array);
@@ -628,7 +666,7 @@ dbd_bind_ph( SV		*sth,
 	PerlIO_printf( DBILOGFP, "         bind %s <== %s (type %ld",
 		       name, neatsvpv(newvalue,0), (long)sql_type );
 	if( is_inout ) {
-	    PerlIO_printf( DBILOGFP, ", inout 0x%lx", (long)newvalue );
+	    PerlIO_printf( DBILOGFP, ", inout 0x%p", newvalue );
 	}
 	if( attribs ) {
 	    PerlIO_printf( DBILOGFP, ", attribs: %s", SvPV(attribs,na) );
@@ -636,7 +674,7 @@ dbd_bind_ph( SV		*sth,
 	PerlIO_printf( DBILOGFP, ")\n" );
     }
 
-    svp = hv_fetch( imp_sth->bind_names, name, name_len, 0 );
+    svp = hv_fetch( imp_sth->bind_names, name, (I32)name_len, 0 );
     if( svp == NULL ) {
 	croak( "Can't bind unknown placeholder '%s' (%s)", name, neatsvpv(ph_namesv,0) );
     }
@@ -657,7 +695,7 @@ dbd_bind_ph( SV		*sth,
 	phs->maxlen = maxlen;
 	phs->sql_type = sql_type;
 	if( is_inout ) {
-	    phs->out_ordinal = find_output_ordinal( imp_sth, name, phs->in_ordinal );
+	    phs->out_ordinal = find_output_ordinal( imp_sth, name, (int)phs->in_ordinal );
 	}
     } else if( is_inout != phs->is_inout ) {
 	croak( "Can't rebind or change param %s in/out mode after first bind (%d => %d)",
@@ -733,8 +771,8 @@ dbd_bind_ph( SV		*sth,
 	    var->sqldata = safemalloc( value_len+sizeof(short) );
 	}
 	var->sqltype = phs->ftype;	// must come after the logic above
-	var->sqllen = value_len + sizeof(short);
-	*(short *)var->sqldata = value_len;
+	var->sqllen = (short)(value_len + sizeof(short));
+	*(short *)var->sqldata = (short)value_len;
 	memcpy( (short *)var->sqldata + 1, value_ptr, value_len );
     } else {
 	// Everything else goes out as DT_STRING or DT_VARIABLE in which case
@@ -745,14 +783,14 @@ dbd_bind_ph( SV		*sth,
 	if( value_len <= MAX_DT_STRING_LENGTH ) {
 	    var->sqltype = phs->ftype;
 	    var->sqldata = value_ptr;
-	    var->sqllen = value_len;
+	    var->sqllen = (short)value_len;
 	} else {
 	    if( !create_tempvar( imp_dbh, sth, imp_sth, phs, value_ptr, value_len ) ) {
 		return( FALSE );
 	    }
 	    var->sqltype = DT_VARIABLE;
 	    var->sqldata = (void *)phs->tempvar_name;
-	    var->sqllen = strlen( phs->tempvar_name );
+	    var->sqllen = (short)strlen( phs->tempvar_name );
 	}
     }
 
@@ -889,8 +927,8 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	for( i=0; i<imp_sth->input_sqlda->sqld; i++ ) {
 	    struct sqlvar	*var = &imp_sth->input_sqlda->sqlvar[i];
 
-	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s\n", 
-			   i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data );
+	    PerlIO_printf( DBILOGFP, "    %2d: type $%04x, ind: %04x, name %s, dataptr %p\n", 
+			   i, var->sqltype, (unsigned short)*var->sqlind, var->sqlname.data, var->sqldata );
 	}
     }
     // Need original input indicators in order to find correct output ordinals later (once input
@@ -905,7 +943,9 @@ dbd_describe( SV *sth, imp_sth_t *imp_sth )
 	imp_sth->output_sqlda = alloc_sqlda( sqlda_size );
 
 	EXEC SQL DESCRIBE OUTPUT FOR :stmt_number USING DESCRIPTOR "imp_sth->output_sqlda";
-	if( SQLCODE ) {
+	if( SQLCODE > 0 ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "warning during describe" ); 
+	} else if( SQLCODE < 0 ) {
 	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "describe output failed" ); 
 	    return( 0 );
 	}
@@ -1168,7 +1208,7 @@ static void
 assign_inout_parameters( SV *sth, imp_sth_t *imp_sth )
 /****************************************************/
 {
-    D_imp_dbh_from_sth;
+    //    D_imp_dbh_from_sth;
     HE		*he;
     HV		*hv;
     SV		*sv;
@@ -1180,7 +1220,7 @@ assign_inout_parameters( SV *sth, imp_sth_t *imp_sth )
 	sv = hv_iterval( hv, he );
 	phs = (phs_t*)((void*)SvPVX(sv));		/* placeholder struct	*/
 	if( phs->out_ordinal != 0 ) {
-	    assign_from_sqlvar( sth, imp_sth, phs->sv, phs->out_ordinal-1, FALSE );
+	    assign_from_sqlvar( sth, imp_sth, phs->sv, (int)phs->out_ordinal-1, FALSE );
 	}
     }
 }
@@ -1215,7 +1255,7 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	EXEC SQL EXECUTE :stmt_number USING DESCRIPTOR "imp_sth->input_sqlda" INTO DESCRIPTOR "imp_sth->output_sqlda";
 	if( SQLCODE ) {
 	    if( SQLCODE == SQLE_NOTFOUND ) {
-		sv_setiv( DBIc_ERR(imp_sth), 0 );
+		sv_setpv( DBIc_ERR(imp_sth), "" );
 		return( 0 );	// No rows affected
 	    } else {
 		// This error case for SQLE_TRUNCATED as well because there is no
@@ -1256,7 +1296,9 @@ dbd_st_execute( SV *sth, imp_sth_t *imp_sth )	/* <= -2:error, >=0:ok row count, 
 	    PerlIO_printf( DBILOGFP, "Open %s (%x)\n", crsr_name, imp_sth );
 	}
 	EXEC SQL OPEN :crsr_name USING DESCRIPTOR "imp_sth->input_sqlda";
-	if( SQLCODE ) {
+	if( SQLCODE > 0 ) {
+	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "warning during open cursor" );
+	} else if( SQLCODE < 0 ) {
 	    ssa_error( sth, SQLCAPTR, SQLE_ERROR, "open cursor failed" );
 	    return( -2 );
 	}
@@ -1311,7 +1353,7 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
     EXEC SQL FETCH :crsr_name USING DESCRIPTOR "imp_sth->output_sqlda";
     if( SQLCODE ) {
 	if( SQLCODE == SQLE_NOTFOUND ) {
-	    sv_setiv( DBIc_ERR(imp_sth), 0 );	/* just end-of-fetch	*/
+	    sv_setpv( DBIc_ERR(imp_sth), "" );	/* just end-of-fetch	*/
 	    return( Nullav );
 	} else if( SQLCODE != SQLE_TRUNCATED ) {
 	    if( SQLCODE > 0 ) {
@@ -1330,7 +1372,7 @@ dbd_st_fetch( SV *sth, imp_sth_t *imp_sth )
 	}
     }
     av = DBIS->get_fbav( imp_sth );
-    num_fields = AvFILL( av ) + 1;
+    num_fields = (int)AvFILL( av ) + 1;
 
     if( debug >= 3 ) {
 	PerlIO_printf(DBILOGFP, "    dbd_st_fetch %d fields\n", num_fields);
@@ -1722,7 +1764,7 @@ dbd_st_FETCH_attrib( SV *sth, imp_sth_t *imp_sth, SV *keysv )
 	return( Nullsv );
     }
     if( cacheit ) { /* cache for next time (via DBI quick_FETCH)	*/
-	SV **svp = hv_fetch( (HV*)SvRV(sth), key, kl, 1 );
+	SV **svp = hv_fetch( (HV*)SvRV(sth), key, (I32)kl, 1 );
 	sv_free( *svp );
 	*svp = retsv;
 	(void)SvREFCNT_inc( retsv );	/* so sv_2mortal won't free it	*/

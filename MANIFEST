@@ -1,12 +1,14 @@
 Changes
 MANIFEST
 README
+README.NT
 ASAny.h
 ASAny.pm
 ASAny.xs
 dbdimp.h
 dbdimp.sqc
 Makefile.PL
+dolink.pl
 license.txt
 t/base.t
 t/login.t

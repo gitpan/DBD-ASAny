@@ -3,7 +3,6 @@
 use DBI;
 use strict;
 
-my $dsn;
 my $dbh;
 my $ins;
 my $nrows;
@@ -16,9 +15,10 @@ my $bloblen = 1000000;
 my $i;
 
 $| = 1;
-$dsn = 'UID=dba;PWD=sql';
+
+my $connstr = 'ENG=asademo;DBN=asademo;DBF=asademo.db;UID=dba;PWD=sql';
 print "Connecting to Database\n"; 
-$dbh = DBI->connect( "DBI:ASAny:", $dsn );
+$dbh = DBI->connect( "DBI:ASAny:", $connstr, '', { AutoCommit => 0 } );
 printf( "connected\n" );
 die unless $dbh;
 printf( "hi\n" );

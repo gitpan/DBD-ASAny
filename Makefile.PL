@@ -22,8 +22,9 @@ my $dbi_dir      = dbd_dbi_dir();
 my $dbi_arch_dir = dbd_dbi_arch_dir();
 my $os = $^O;
 my $osvers = $Config{osvers};
-my $max_asa_ver = 15;
+my $max_asa_ver = 9;
 my $min_asa_ver = 6;
+my $perl_bitness = $Config{ptrsize} * 8;
 $osvers =~ s/^\s*(\d+\.\d+).*/$1/;	# drop sub-sub-version: 2.5.1 -> 2.5
 
 my %opts = (
@@ -130,11 +131,13 @@ foreach $dir ( @install_dirs ) {
 	    }
 	}
     } else {
-	if( -d "${dir}/lib" &&
-	    -d "${dir}/bin" &&
+	if( ( -d "${dir}/lib" || -d "${dir}/lib32" || -d "${dir}/lib64" ) &&
+	    ( -d "${dir}/bin" || -d "${dir}/bin32" || -d "${dir}/bin64" ) &&
 	    -d "${dir}/include" ) {
 	    for( $ver=$max_asa_ver; $ver >= $min_asa_ver; $ver-- ) {
-		if( -e "${dir}/bin/dbeng${ver}" ) {
+		if( -e "${dir}/bin/dbeng${ver}" ||
+		    -e "${dir}/bin32/dbeng${ver}" ||
+		    -e "${dir}/bin64/dbeng${ver}" ) {
 		    $ASA = $dir;
 		    $asa_version_major = $ver;
 		    $found = 1;
@@ -147,7 +150,7 @@ foreach $dir ( @install_dirs ) {
 }
 
 if( !$found ) {
-    die "** Unable to find Adaptiver Server Anywhere installation\n\n** Please set ASANY.\n";
+    die "** Unable to find Adaptiver Server Anywhere installation\n\n** Please set the ASANY environment variable.\n";
 }
 
 print "Using ASA version ${asa_version_major} in $ASA\n";
@@ -173,15 +176,25 @@ my $sysliblist;
 my $libdir;
 $sysliblist = "";
 if( $Config{osname} eq "MSWin32" ) {
-    $sysliblist .= qq( -L"$ASA/win32/lib" );
+    if( $Config{archname} =~ /-x64-/ ) {
+	$sysliblist .= qq( -L"$ASA/x64/lib" );
+    } else {
+	$sysliblist .= qq( -L"$ASA/win32/lib" );
+    }
     $sysliblist .= qq( -L"$Config{archlibexp}/CORE" );
     foreach $libdir ( split( /;/, $ENV{LIB} ) ) {
 	$sysliblist .= qq( -L"$libdir" );
     }
-    $sysliblist .= " -ldblibtm";
+    $sysliblist .= " -ldblibtm ";
 } else {
-    $sysliblist .= "-L$ASA/lib ";
+    if( $asa_version_major >= 9 ) {
+	$sysliblist .= "-L$ASA/lib${perl_bitness} ";
+    } else {
+	$sysliblist .= "-L$ASA/lib ";
+    }
+    
     $sysliblist .= "-L$Config{archlibexp}/CORE ";
+
     if( $Config{useithreads} ) {
 	$sysliblist .= " -ldblib${asa_version_major}_r -ldbtasks${asa_version_major}_r";
     } else {
@@ -224,11 +237,12 @@ if( $is_gcc ) {
 $opts{LIBS} = [ $sysliblist ];
 if( $Config{osname} eq "MSWin32" ) {
     $opts{INC}  = qq( -I"$ASA/h" );
-    $opts{INC}  .= qq( -I"$Config{sitearchexp}/auto/DBI" );
-    $opts{DEFINE} .= ' -DWINNT';
+    $opts{INC}  .= qq( -I"$dbi_arch_dir" );
+    $opts{DEFINE} .= ' -DWINNT -D_CRT_SECURE_NO_DEPRECATE';
+    $opts{LD} = "\$(PERL) dolink.pl \$@";
 } else {
     $opts{INC}  = "-I$ASA/include ";
-    $opts{INC}  .= "-I$Config{sitearchexp}/auto/DBI";
+    $opts{INC}  .= "-I$dbi_arch_dir ";
     $opts{DEFINE} .= ' -DUNIX';
 }
 # $opts{OPTIMIZE}="-Zi";

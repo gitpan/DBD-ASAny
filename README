@@ -1,7 +1,7 @@
 DBD::ASAny -- an Adaptive Server Anywhere interface for Perl 5.
 
    Portions Copyright (c) 1994,1995,1996            Tim Bunce
-   Portions Copyright (c) 1996,1998,1999,2000,2003  Sybase Inc.
+   Portions Copyright (c) 1996-2006		    iAnywhere Solutions, Inc.
 
    For license information, please see license.txt included in this
    distribution.
@@ -14,15 +14,24 @@ DBD::ASAny -- an Adaptive Server Anywhere interface for Perl 5.
     Build, test and install the DBI module (at least DBI 1.34 is recommended).
     It is very important to test it and install it!
 
+    An ASA client installation is *required* for building and
+    deploying.
+
+    An ASA server install is recommended for building otherwise
+    the "make test" portion of the build will fail.
+
     Remember to *read* the DBI README file!
 
 
 Building:
     On UNIX:
-	[ Solaris, AIX, HP-UX, Linux ]
+	[ Solaris, AIX, HP-UX, Linux, etc. ]
 
+	source config.sh (or config.csh) from the ASA installation
 	perl Makefile.PL
 	make
+	copy asademo.db from the ASA installation directory
+	    to the current directory
 	make test
 	make install
     
@@ -34,6 +43,8 @@ Building:
 
 	perl Makefile.PL
 	nmake
+	copy asademo.db from the ASA installation directory
+	    to the current directory
 	nmake test
 	nmake install
     
@@ -70,19 +81,9 @@ Notes:
 	$dbh = DBI->connect( 'DBI:ASAny:ENG=asademo', 'dba', 'sql' );
     
 
-2.  Before running 'make test', a copy of the asademo.db file located
-    in the ASA directory should be in your current directory. There
-    have been problems autostarting and autostopping engines in rapid
-    succession on UNIX with old versions of ASA. If you encounter a
-    problem autostarting the engine, start the engine on
-    asademo.db. Make sure the server & database names are both
-    'asademo'. Icons installed with recent ASA versions for Windows
-    start the demo database under a different name (such as
-    'asademo9') -- do not use these icons to start the database.
+2.  The ASA DBD driver is thread-safe when using Perl ithreads.
 
-3.  The ASAny DBD driver is thread-safe when using Perl ithreads.
-
-4.  Prepared statements are not dropped from the ASA server until the
+3.  Prepared statements are not dropped from the ASA server until the
     statement handle is destroyed in the perl script. Calling finish()
     is not sufficient to drop the handle that the server is holding
     onto -- use "undef" instead or reuse the same perl variable for
@@ -98,7 +99,7 @@ Notes:
 
 ---------------------------------------------------------------
 
-There are two examples in the 'eg' directory.
+Examples can be found in the 'eg' directory:
 connect.pl  -> Demonstrates a simple connect.
 retrieve.pl -> Demonstrates retrieving data from a table and displaying the result set.
 blobs.pl    -> Demonstrates the use of blobs

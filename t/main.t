@@ -20,9 +20,9 @@ print "Switch: $switch->{'Attribution'}, $switch->{'Version'}\n";
 
 print "Available Drivers: ",join(", ",DBI->available_drivers()),"\n";
 
-my $dbh = DBI->connect("DBI:ASAny:asademo", 'UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db', '', {PrintError => 0});
+my $dbh = DBI->connect("DBI:ASAny:UID=dba;PWD=sql;ENG=asademo;DBF=asademo.db", '', '', {PrintError => 0});
 
-die "Unable for connect to asademo: $DBI::errstr"
+die "Unable to connect to asademo: $DBI::errstr"
     unless $dbh;
 
 my $sth;
@@ -43,7 +43,7 @@ if($sth->execute) {
 	}
 	print "@dat\n";
     }
-    ($rows == $sth->rows)
+    ($rows == $sth->rows || $sth->rows < 0 )
 	and print "ok 4\n"
 	    or print "not ok 4\n";
 #    $sth->finish;
@@ -93,7 +93,7 @@ if($sth->execute) {
     }
     $ok and print "ok 10\n"
 	or print "not ok 10\n";
-    ($rows == $sth->rows)
+    ($rows == $sth->rows || $sth->rows < 0)
 	and print "ok 11\n"
 	    or print "not ok 11\n";
 #    $sth->finish;

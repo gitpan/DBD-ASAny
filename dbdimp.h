@@ -35,6 +35,8 @@ struct imp_dbh_st {
     dbih_dbc_t 		com;		/* MUST be first element in structure	*/
 
     SQLCA		sqlca;
+    SQLCA		*sqlcap;  // needed so server-side perl can use an
+                                  // existing connection
     // We want to reuse cursor names because dblib
     // holds onto cursor information in case it is reopened
     // without being redeclared

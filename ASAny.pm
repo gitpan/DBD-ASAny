@@ -1,7 +1,7 @@
 require 5.002;
 
 
-$DBD::ASAny::VERSION = '1.13';
+$DBD::ASAny::VERSION = '1.14';
 
 {
     package DBD::ASAny;
@@ -72,6 +72,7 @@ $DBD::ASAny::VERSION = '1.13';
 	# a connect string parameter ('label=value;' format) then
 	# 'ENG=' is prefixed.
 	my $conn_str;
+	my $sqlcap;
 
 	if( defined( $dbname ) ) {
 	    $conn_str = $dbname;
@@ -79,6 +80,12 @@ $DBD::ASAny::VERSION = '1.13';
 	    $conn_str =~ s/[\s;]*$//;
 	    if( $conn_str =~ /^[^=;]+($|;)/ ) {
 		$conn_str = 'ENG=' . $conn_str;
+	    }
+	    
+	    # look for undocumented option indicating the sqlca to use for
+	    # server-side perl
+	    if( $conn_str =~ /^ENG=saperl;sa_perl_sqlca=([0-9a-fA-F]*)$/ ) {
+	    	$sqlcap = $1;
 	    }
 	} else {
 	    $conn_str = '';
@@ -103,7 +110,8 @@ $DBD::ASAny::VERSION = '1.13';
 	# Call ASAny connect func in ASAny.xs file
 	# and populate internal handle data.
 
-	DBD::ASAny::db::_login($dbh, $conn_str, '', '')
+	DBD::ASAny::db::_login($dbh, $conn_str, 
+			       (defined $sqlcap) ? $sqlcap : '', '')
 	    or return undef;
 
 	$dbh;

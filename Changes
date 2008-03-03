@@ -1,10 +1,33 @@
+Changes in DBD::ASAny 1.14 21th Nov 2006, 3rd Mar 2008
+  (previous changes to 1.14 were not released)
+  Fixed Windows x64 builds.
+  Set max ASA version to 9, handle 9.0.2 bin32/bin64 directories.
+
+Changes in DBD::ASAny 1.14 7th Sept 2006
+  (previous changes to 1.14 were not released)
+  Added a manifest to the DLL for VS2005 builds.
+
+Changes in DBD::ASAny 1.14 9th Dec 2005
+  (previous changes to 1.14 were not released)
+  Added -D_CRT_SECURE_NO_DEPRECATE to avoid VS2005 warnings.
+  Cleaned up the README & the examples a bit.
+  Added README.nt with CRLF line endings.
+
+Changes in DBD::ASAny 1.14  29th Jan 2004, 5th Apr 2005
+  Parsing for placeholders assumed that only single-quotes could be used to 
+    delimit a string. Now, either single or double quotes can be used.
+  If fetch was called when there were no more rows, the driver set the err 
+    value to (integer) zero but DBI could interpret that as a warning because
+    it converted it to a string and saw that it was non-empty. We now set
+    err to the empty string.
+
 Changes in DBD::ASAny 1.13	7th Mar 2002, 3rd Sept 2003, 29th Oct 2003
   Support 64bit UNIX platforms
   Avoid compile-time warning about assign_blob()
   Added /opt/sybase/SYBS* as default installation directories to search for ASA
   An error was reported if execute() was called twice on the same statement
     handle. Changed execute() to close a previously opened cursor using that
-    statement. Also, the prepared statement was being dropped at during
+    statement. Also, the prepared statement was being dropped during
     finish() rather during destroy & that prevented the prepare_cache from
     working.
   Updated README to warn about resource governor errors now that statement

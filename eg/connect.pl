@@ -2,11 +2,11 @@
 #
 use DBI;
 use strict;
-my $database = "asademo";
-my $data_source = "DBI:ASAny:$database";
-my $username = "UID=dba;PWD=sql;ENG=asademo";
-my $dbh = DBI->connect( $data_source, $username, '' );
-#or die "Can't connect to $data_source: $dbh->errstr\n";
+my $connstr = 'ENG=asademo;DBN=asademo;DBF=asademo.db;UID=dba;PWD=sql';
+# For a remote connection, you might want to add "CommLinks=tcpcip" for example
+
+my $dbh = DBI->connect( "DBI:ASAny:$connstr", '', '', {PrintError => 0, AutoCommit => 0} )
+    or die "Connection failed\n    Connection string: $connstr\n    Error message    : $DBI::errstr\n";
 $dbh->disconnect;
 exit(0);
 __END__
